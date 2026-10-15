@@ -3,11 +3,15 @@ services:
     name: gestor-anuncios
     runtime: node
     plan: free
-    buildCommand: npm run check && npm test
+    buildCommand: npm ci && npm run check && npm test
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: APP_BASE_URL
+        value: https://gestor-anuncios.onrender.com
       - key: ADMIN_PASSWORD
         sync: false
+# Configure DATABASE_URL, TOKEN_ENCRYPTION_KEY, MELI_CLIENT_ID e MELI_CLIENT_SECRET
+# no serviço existente, após criar os recursos. Este arquivo não cria banco.
