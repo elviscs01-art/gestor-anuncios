@@ -71,3 +71,13 @@ test('report escapes external content and keeps optional failures explicit',asyn
  const {cookie,session}=await h.login();const report=await h.post('/anuncio',{csrf:session.csrf,item:'MLB4155100949'},{cookie});
  assert.equal(report.status,200);assert.ok(!report.body.includes('<script>'));assert.match(report.body,/&lt;script&gt;/);assert.match(report.body,/compatibilidades indisponível/);
 });
+
+test('form policy preserves origin and rejects opaque or missing origins',async()=>{
+ const {request,post}=harness();
+ const page=await request('/login');
+ assert.equal(page.headers['referrer-policy'],'strict-origin');
+ for(const origin of ['null',undefined,'https://attacker.example']){
+  assert.equal((await post('/login',{password},{origin})).status,403);
+ }
+ assert.equal((await post('/login',{password})).status,303);
+});

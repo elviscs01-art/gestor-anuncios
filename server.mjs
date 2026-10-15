@@ -20,7 +20,7 @@ export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}
  const cookie=(value,maxAge)=>`${cookieName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${settings.production?'; Secure':''}`;
  const handler=async(req,res)=>{
   const nonce=random();
-  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
+  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin');
   res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'self' 'unsafe-inline'; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
