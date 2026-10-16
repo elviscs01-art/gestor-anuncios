@@ -1,3 +1,15 @@
+# Versão 0.3.3 — resultado com somente avisos
+
+Uma resposta HTTP 400 que contenha exclusivamente causas explicitamente classificadas como warning passa a ser exibida como Somente avisos nesta resposta. O retorno HTTP original é preservado e ok continua false: a aplicação não afirma aceite HTTP 204 nem aprovação para publicar.
+
+Não há lista de códigos de frete ignorados: o mesmo código com type=error, sem tipo ou com tipo desconhecido continua sendo apresentado como pendência. A classificação considera todas as causas, inclusive as que excedem o limite de apresentação. Nenhuma regra ou condição de frete é alterada.
+
+O diagnóstico recebido em erro 1.pdf mostrou ME2 e frete grátis no envio, ME2 nas preferências da conta e da categoria, e duas causas do tipo warning. Não há evidência nesse retorno de que seja necessário habilitar ME1.
+
+Atualize os arquivos na raiz do GitHub e aguarde o Render. Abra o rascunho existente e valide uma vez para atualizar sua classificação. Não é preciso recriar o rascunho ou mudar as variáveis. A aplicação continua sem publicar anúncios.
+
+Referência: https://developers.mercadolivre.com.br/pt_br/guia-para-produtos/validacoes
+
 # Versão 0.3.2 — diagnóstico de frete
 
 Esta versão investiga respostas do validador com mensagens de frete. Ela registra no resultado do rascunho a modalidade e os campos de frete realmente enviados, o preço, a categoria, o tipo das causas e um resumo das modalidades/logísticas retornadas pelas consultas de preferências do vendedor e da categoria. Não registra tokens, segredos, cabeçalhos de autorização nem endereços pessoais.

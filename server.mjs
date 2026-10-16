@@ -122,7 +122,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const store=settings.databaseUrl?await postgres(settings.databaseUrl):new SetupSessions();
   const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?createMeli({store,crypto,...settings}):null;
   const {server}=createApp({settings,store,meli});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.3.2 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.3.3 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

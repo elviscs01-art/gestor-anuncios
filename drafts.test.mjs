@@ -114,7 +114,7 @@ test('validator distinguishes warnings from blocking errors without inferring se
 });
 test('HTTP error containing only warnings is never treated as validated',async()=>{
  const f=apiFixture(()=>Response.json({cause:[{code:'notice',message:'<script>warning</script>',type:'warning'}]},{status:400}));
- const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));assert.equal(result.ok,false);assert.match(result.issues[0],/não confirmou/);
+ const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));assert.equal(result.ok,false);assert.equal(result.outcome,'warnings_only');assert.deepEqual(result.issues,[]);assert.equal(result.httpStatus,400);
  const html=editor({id:random(),revision:1,data:{...draft(),validation:result}},{csrf:'csrf'});assert.ok(!html.includes('<script>warning'));assert.ok(html.includes('&lt;script&gt;'));
 });
 
@@ -130,4 +130,20 @@ test('shipping diagnostics preserve the sent mode, consult preferences and omit 
 test('shipping preference summary projects only known fields',()=>{
  assert.deepEqual(shippingSummary({modes:['me2'],shipping_modes:['me2'],logistics:[{mode:'me2',type:'drop_off',types:[{type:'cross_docking',address:'private'}],token:'private'}],token:'private'}),{modes:['me2'],shipping_modes:['me2'],logistics:[{mode:'me2',type:'drop_off',types:['cross_docking']}]});
  assert.deepEqual(shippingSummary(null),{});
+});
+
+test('warnings-only classification never hides errors beyond the display limit',async()=>{
+ const causes=Array.from({length:60},()=>({type:'warning',code:'notice',message:'Informativo'}));causes.push({type:'error',code:'blocked',message:'Bloqueio'});
+ const f=apiFixture(()=>Response.json({cause:causes},{status:400}));const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));
+ assert.equal(result.outcome,'rejected');assert.equal(result.ok,false);
+});
+test('missing or unknown cause types remain unresolved even for a familiar shipping code',async()=>{
+ for(const type of [undefined,'error','unknown']){
+  const f=apiFixture(()=>Response.json({cause:[{type,code:'shipping.lost_me1_by_user',message:'User has not mode me1'}]},{status:400}));
+  const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));assert.equal(result.outcome,'rejected');assert.equal(result.ok,false);assert.equal(result.issues.length,1);
+ }
+});
+test('warnings-only display states the actual HTTP result without claiming approval',()=>{
+ const d=draft();d.validation={ok:false,outcome:'warnings_only',httpStatus:400,stage:'remote',issues:[],warnings:['Frete grátis obrigatório'],checkedAt:new Date().toISOString()};
+ const html=editor({id:random(),revision:1,data:d},{csrf:'csrf'});assert.match(html,/Somente avisos nesta resposta/);assert.match(html,/retorno HTTP foi 400/);assert.ok(!html.includes('Dados aceitos pelo validador'));assert.match(html,/Frete grátis obrigatório/);
 });
