@@ -1,4 +1,7 @@
+import {createOverview,range} from './overview.mjs';
+import * as overviewView from './overview-views.mjs';
 import {readFileSync} from 'node:fs';
+const overviewScript=readFileSync(new URL('./overview-client.js',import.meta.url),'utf8');
 const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
 import {createMetrics} from './metrics.mjs';
 import * as metricsView from './metrics-views.mjs';
@@ -23,7 +26,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -35,12 +38,13 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&req.url.startsWith('/metricas');
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
+   if(req.method==='GET'&&path==='/overview.js')return send(200,overviewScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsScript,'text/javascript; charset=utf-8');
    if(!['GET','POST'].includes(req.method))return send(405,'Método não permitido.');
    if(req.method==='POST'&&req.headers.origin!==settings.baseUrl)throw new UserError('Solicitação de outra origem bloqueada.',403);
@@ -64,10 +68,31 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    }
    if(!session){if(jsonMetrics)return send(401,JSON.stringify({error:'Sessão expirada. Entre novamente no aplicativo.'}),'application/json');return redirect('/login');}
    if(req.method==='POST'&&!equal(form.get('csrf')||'',session.csrf))throw new UserError('Formulário expirado. Recarregue a página e tente novamente.',403);
+   session={...session,page:path};
    if(path==='/logout'&&req.method==='POST'){await store.deleteSession(sessionId);res.setHeader('Set-Cookie',cookie('',0));return redirect('/login');}
-   if(path==='/'&&req.method==='GET'){
+   if(path==='/configuracoes'&&req.method==='GET'){
     const notices={connected:'Autorização salva. Confira o vendedor e consulte o anúncio de referência.',oauth_failed:'Não foi possível confirmar a autorização. Confira a conta principal, as permissões, o PKCE e o endereço de retorno; depois tente conectar novamente.'};
     return send(200,view.home({session,missing,connection:await store.summary(),baseUrl:settings.baseUrl,notice:notices[url.searchParams.get('notice')]||''}));
+   }
+   if(path==='/'&&req.method==='GET'){
+    const connection=await store.summary(),owner=String(connection?.user_id||''),ready=!missing.length&&!!dashboard&&connection?.status==='ready';
+    const notice=url.searchParams.get('notice')==='connected'?'Conta conectada com sucesso.':url.searchParams.get('notice')==='oauth_failed'?'Não foi possível conectar. Confira a conexão em Configurações.':'';
+    return send(200,overviewView.page({session,ready,notice,params:url.searchParams,job:ready?await dashboard.read(owner):null,catalog:ready&&catalog?await catalog.read(owner):null}));
+   }
+   if(path==='/anuncios'||path.startsWith('/anuncios/')||path.startsWith('/painel/')){
+    const kind=path.startsWith('/anuncios')?'catalog':'dashboard',service=kind==='catalog'?catalog:dashboard;
+    const connection=await store.summary();if(missing.length||!service||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);
+    const owner=String(connection.user_id);
+    if(path==='/anuncios'&&req.method==='GET')return send(200,overviewView.page({session,job:await service.read(owner),params:url.searchParams,kind}));
+    if(path==='/painel/vendas'&&req.method==='GET'){
+     await meli.metricsProfile(owner);const at=now(),page=await meli.dashboardOrders(owner,{...range(at),paidOnly:true});
+     return send(200,JSON.stringify({html:overviewView.recent(page.rows,new Date(at).toISOString())}),'application/json');
+    }
+    const action=path.split('/').pop();
+    if(req.method==='POST'&&action==='iniciar')await service.start(owner);
+    else if(req.method==='POST'&&action==='avancar')await service.advance(owner);
+    else if(!(req.method==='GET'&&action==='dados'))throw new UserError('Página não encontrada.',404);
+    return send(200,JSON.stringify(overviewView.state(await service.read(owner),url.searchParams,kind==='dashboard'&&catalog?await catalog.read(owner):null,kind)),'application/json');
    }
    if(path==='/oauth/mercadolivre/start'&&req.method==='POST'){
     if(missing.length||!meli)throw new UserError('Conclua as configurações indicadas no painel antes de conectar.',409);
@@ -204,8 +229,10 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const lab=meli?createLab({store,live:meli,test:testMeli,crypto}):null;
   const publications=meli?createPublications({store,meli}):null;
   const metrics=meli?createMetrics({db:store.metrics,meli}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.7.0 iniciado.'));
+  const dashboard=meli?createOverview({db:store.dashboard,meli,kind:'dashboard'}):null;
+  const catalog=meli?createOverview({db:store.catalog,meli,kind:'catalog'}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.8.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

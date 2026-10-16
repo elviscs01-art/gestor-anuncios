@@ -15,7 +15,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
  async function call(path,{token,form}={}){
   let response;
-  try{response=await fetcher(API+path,{method:form?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(12000),headers:form?{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}:{Authorization:`Bearer ${token}`,Accept:'application/json'},...(form?{body:new URLSearchParams(form)}:{})});}
+  try{response=await fetcher(API+path,{method:form?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(12000),headers:form?{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}:{Authorization:`Bearer ${token}`,Accept:'application/json',...(path.startsWith('/shipments/')?{'x-format-new':'true'}:{})},...(form?{body:new URLSearchParams(form)}:{})});}
   catch{throw new UserError('Não foi possível acessar o Mercado Livre. Tente novamente; se ocorreu durante a autorização, inicie uma nova conexão.',502);}
   let data;
   try{data=await response.json();}catch{throw new UserError('O Mercado Livre retornou uma resposta inesperada.',502);}
@@ -97,6 +97,33 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  return {
   redirectUri,
   async metricsProfile(owner){return (await officialAccess(owner)).profile;},
+  async catalogItem(id,owner){
+   if(!/^MLB\d+$/.test(id))throw new UserError('Código de anúncio inválido.');
+   const item=await get('/items/'+id);
+   if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio de outra conta.',403);
+   return {id,title:String(item.title||item.family_name||id),status:item.status,created:item.date_created,price:item.price,currency:item.currency_id,quantity:item.available_quantity,sold:item.sold_quantity,skus:[...new Set([item.seller_custom_field,...(item.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name),...(item.variations||[]).flatMap(v=>[v.seller_custom_field,...(v.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name)])].filter(Boolean))]};
+  },
+  async dashboardOrders(owner,{from,to,offset=0,paidOnly=false}){
+   const params=new URLSearchParams({seller:String(owner),'order.date_created.from':from,'order.date_created.to':to,'order.status':paidOnly?'paid':'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,invalid',sort:'date_desc',limit:'50',offset:String(offset)});
+   const data=await get('/orders/search?'+params);
+   if(!Array.isArray(data.results)||!Number.isSafeInteger(data.paging?.total)||data.paging.total<0||data.paging.offset!==offset)throw new UserError('Não foi possível confirmar a paginação das vendas.',502);
+   const rows=data.results.map(o=>{
+    if(String(o.seller?.id)!==String(owner)||!/^\d+$/.test(String(o.id))||!Number.isFinite(Date.parse(o.date_created))||Date.parse(o.date_created)<Date.parse(from)||Date.parse(o.date_created)>Date.parse(to))throw new UserError('A consulta retornou um pedido fora da conta ou do período.',502);
+    if(!Array.isArray(o.order_items)||!o.order_items.length||o.currency_id!=='BRL'||o.order_items.some(i=>!Number.isSafeInteger(i.quantity)||i.quantity<1||!Number.isFinite(i.unit_price)||i.unit_price<0))throw new UserError('Valores de venda incompletos. O resumo anterior foi preservado.',502);
+    return {id:String(o.id),status:String(o.status),created:o.date_created,closed:o.date_closed||null,grossCents:o.order_items.reduce((n,i)=>n+Math.round(i.unit_price*100)*i.quantity,0),units:o.order_items.reduce((n,i)=>n+i.quantity,0),title:String(o.order_items[0].item?.title||'Pedido'),shipment:/^\d+$/.test(String(o.shipping?.id))?String(o.shipping.id):null};
+   });
+   return {rows,total:data.paging.total};
+  },
+  async dashboardShipment(id,owner){
+   if(!/^\d+$/.test(String(id)))throw new UserError('Envio inválido.');
+   const s=await get('/shipments/'+id);
+   if(String(s.id)!==String(id)||String(s.origin?.sender_id??s.sender_id)!==String(owner))throw new UserError('Envio de outra conta.',403);
+   const result={id:String(id),status:s.status,substatus:s.substatus,logistic:s.logistic?.type||s.logistic_type};
+   if(['delivered','not_delivered','cancelled','shipped'].includes(s.status)||['picked_up','authorized_by_carrier','in_hub'].includes(s.substatus)||result.logistic==='fulfillment')return result;
+   try{const sla=await get('/shipments/'+id+'/sla');result.deadline=Number.isFinite(Date.parse(sla.expected_date))?sla.expected_date:null;result.slaStatus=sla.status;}
+   catch{result.error='Prazo de despacho indisponível.';}
+   return result;
+  },
   async metricsScan(owner,cursor){
    if(!/^[0-9]+$/.test(String(owner)))throw new UserError('Vendedor inválido.');
    const q=new URLSearchParams({search_type:'scan',limit:'100'});

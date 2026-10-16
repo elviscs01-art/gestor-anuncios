@@ -1,3 +1,26 @@
+# Atualização 0.8.0 — Início e navegação
+
+Extraia o pacote e envie os arquivos para a raiz do mesmo repositório no GitHub, substituindo os de mesmo nome. Não envie o ZIP nem crie uma subpasta. Aguarde o deploy no Render; o log deve indicar Gestor 0.8.0 iniciado. Não é necessário trocar credenciais ou apagar banco, rascunhos ou anúncios.
+
+- Menu lateral: Início, Lista de anúncios, Publicações na conta oficial, Meus rascunhos, Diagnóstico de anúncios e Configurações.
+- Configurações concentra conexão, endereço de autorização e consulta do anúncio de referência.
+- Início coleta pedidos criados nos últimos 30 dias incluindo hoje, em Brasília; seleção de gráfico de 7 ou 30 dias. Valores brutos de produtos apenas em pedidos atualmente pagos, antes de taxas, sem frete, por data de criação do pedido. Não representa saldo líquido nem conciliação financeira de reembolsos.
+- Reputação usa os períodos fornecidos pela API; ausência de informação aparece como indisponível, nunca como zero.
+- Despacho: consulta até 12 envios distintos dos pedidos pagos mais recentes dentro do período. Mostra SLA disponível, excluindo Full, transporte e finalizados. É uma amostra, não uma fila completa de pendências. Atualize o resumo para consultar novamente os prazos.
+- Vendas recentes: consulta a cada 60 segundos com a página visível, exibindo até 8 pedidos pagos recentes dentre os retornados pela API no período de 30 dias. Não é transmissão instantânea por notificações. O gráfico e os totais permanecem referentes à última atualização completa.
+- Lista de anúncios: coleta independente, busca por título/código/SKU, filtro de status e páginas de 40 itens. Resumo na página inicial usa a última lista completa; carregue-a uma vez em Lista de anúncios.
+- Coletas são salvas no banco e podem continuar ao voltar à página. Falhas preservam o resumo completo anterior. Máximo de 10 mil pedidos no período e 100 mil anúncios por coleta; acima disso a coleta é interrompida com mensagem, sem apresentar totais parciais como completos.
+- Pedidos e envios exigem as permissões de leitura correspondentes. Se a API negar, verifique as permissões e reconecte em Configurações. Dados de compradores e endereços não são armazenados pelo painel.
+
+Validação local: testes automatizados e navegador com respostas simuladas. O acesso aos dados reais depende do deploy e das permissões da conta; não foi testado com credenciais reais nesta atualização.
+
+Referências oficiais consultadas:
+- https://developers.mercadolivre.com.br/pt_br/gerenciamento-de-vendas
+- https://developers.mercadolivre.com.br/pt_br/registre-o-seu-aplicativo/gerenciamento-de-envios
+- https://developers.mercadolivre.com.br/pt_br/produto-consulta-de-usuarios/reputacao-de-vendedores
+
+---
+
 # Gestor de anúncios — versão 0.7.0
 
 ## Diagnóstico de anúncios

@@ -30,13 +30,22 @@ test('health is public and login does not use Basic auth',async()=>{
  const denied=await request('/');assert.equal(denied.status,303);assert.equal(denied.headers.location,'/login');assert.equal(denied.headers['www-authenticate'],undefined);
  assert.match((await request('/login')).body,/type="password"/);
 });
+
+test('overview data requires a session and refresh requires origin and csrf',async()=>{
+ const h=harness();
+ for(const path of ['/painel/dados','/painel/vendas','/anuncios/dados'])assert.equal((await h.request(path,{headers:{accept:'application/json'}})).status,401);
+ const {cookie}=await h.login();
+ for(const path of ['/painel/iniciar','/painel/avancar','/anuncios/iniciar'])assert.equal((await h.post(path,{}, {cookie,accept:'application/json'})).status,403);
+ assert.match((await h.request('/',{headers:{cookie}})).body,/href="\/configuracoes"/);
+ assert.match((await h.request('/configuracoes',{headers:{cookie}})).body,/Endereço de retorno/);
+});
 test('login, csrf, logout and protected cookies',async()=>{
  const {post,request,login}=harness();
  assert.equal((await post('/login',{password:'wrong'})).status,401);
  assert.equal((await post('/login',{password},{origin:'https://other.example'})).status,403);
  const {response,cookie,session}=await login();
  for(const flag of ['__Host-gestor=','HttpOnly','Secure','SameSite=Lax'])assert.ok(response.headers['set-cookie'].includes(flag));
- const home=await request('/',{headers:{cookie}});assert.ok(home.headers['content-security-policy'].includes('https://auth.mercadolivre.com.br'));assert.equal(home.status,200);assert.match(home.body,/DATABASE_URL/);assert.ok(!home.body.includes(password));
+ const home=await request('/',{headers:{cookie}});assert.ok(home.headers['content-security-policy'].includes('https://auth.mercadolivre.com.br'));assert.equal(home.status,200);assert.match(home.body,/Aqui está o resumo/);assert.match((await request('/configuracoes',{headers:{cookie}})).body,/DATABASE_URL/);assert.ok(!home.body.includes(password));
  assert.equal((await post('/logout',{}, {cookie})).status,403);
  assert.equal((await post('/logout',{csrf:session.csrf},{cookie})).status,303);
  assert.equal((await request('/',{headers:{cookie}})).headers.location,'/login');
