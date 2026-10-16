@@ -1,3 +1,13 @@
+# Versão 0.3.2 — diagnóstico de frete
+
+Esta versão investiga respostas do validador com mensagens de frete. Ela registra no resultado do rascunho a modalidade e os campos de frete realmente enviados, o preço, a categoria, o tipo das causas e um resumo das modalidades/logísticas retornadas pelas consultas de preferências do vendedor e da categoria. Não registra tokens, segredos, cabeçalhos de autorização nem endereços pessoais.
+
+Não modifica o frete, não publica e não considera HTTP 400 como aprovação. Falhas nas consultas auxiliares aparecem no diagnóstico e não apagam a resposta do validador.
+
+Atualize os arquivos na raiz do GitHub, aguarde o Render e abra o rascunho existente. Clique em Salvar e validar no Mercado Livre. Se persistir a mensagem, copie a seção Diagnóstico de frete para investigação. Não é necessário recriar o rascunho ou alterar variáveis.
+
+Fontes: https://developers.mercadolivre.com.br/en_us/authentication-and-authorization/validations e https://developers.mercadolivre.com.br/pt_br/envio-personalizado/mercado-envios
+
 # Correção 0.3.1 — marca e mensagens do validador
 
 Esta atualização corrige o envio de atributos, incluindo marcas próprias: o texto preenchido é sempre enviado em value_name; identificadores importados só são reaproveitados quando correspondem a uma opção da ficha atual da categoria. Isso evita omitir a marca e depender de um identificador não resolvido.

@@ -1,6 +1,16 @@
 import {makeDraft,preparePayload} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
 const API='https://api.mercadolibre.com';
+export function shippingSummary(data){
+ const result={};
+ for(const key of ['modes','shipping_modes'])if(Array.isArray(data?.[key]))result[key]=data[key].filter(v=>typeof v==='string').slice(0,30);
+ if(Array.isArray(data?.logistics))result.logistics=data.logistics.slice(0,30).map(entry=>{
+  const row={};for(const key of ['mode','type'])if(typeof entry?.[key]==='string')row[key]=entry[key].slice(0,100);
+  if(Array.isArray(entry?.types))row.types=entry.types.slice(0,30).map(t=>typeof t==='string'?t:typeof t?.type==='string'?t.type:'não informado');
+  return row;
+ });
+ return result;
+}
 export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',fetcher=fetch,now=Date.now}){
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
  async function call(path,{token,form}={}){
@@ -82,7 +92,13 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
      if(message)(cause.type==='warning'?warnings:issues).push(message);
     }
     if(!issues.length)issues.push(warnings.length?'O Mercado Livre retornou avisos, mas não confirmou a validação (HTTP '+response.status+').':'O Mercado Livre recusou os dados enviados'+(typeof data.error==='string'?': '+data.error.slice(0,120):'.'));
-    return {ok:false,stage:'remote',issues,warnings,httpStatus:response.status,checkedAt:new Date(now()).toISOString()};
+    let shippingDiagnostic;
+    if(causes.some(c=>typeof c?.code==='string'&&(c.code.startsWith('shipping.')||c.code.startsWith('item.shipping.')))){
+     const preferences=async path=>{try{return {data:shippingSummary(await get(path))};}catch(error){return {error:error instanceof UserError?error.message:'Consulta indisponível.'};}};
+     const [seller,categoryPreferences]=await Promise.all([preferences('/users/'+encodeURIComponent(String(profile.id))+'/shipping_preferences'),preferences('/categories/'+draft.categoryId+'/shipping_preferences')]);
+     shippingDiagnostic={sent:{category_id:prepared.payload.category_id,price:prepared.payload.price,currency_id:prepared.payload.currency_id,shipping:prepared.payload.shipping||null},seller,category:categoryPreferences,causes:causes.slice(0,60).map(c=>({code:String(c?.code||'').slice(0,200),type:String(c?.type||'não informado').slice(0,50)}))};
+    }
+    return {ok:false,stage:'remote',issues,warnings,httpStatus:response.status,...shippingDiagnostic?{shippingDiagnostic}:{},checkedAt:new Date(now()).toISOString()};
    }
    const messages={401:'Reconecte sua conta para validar.',403:'O Mercado Livre negou a validação. Confira a permissão de publicação com leitura e escrita.',429:'Limite de consultas atingido. Aguarde antes de validar novamente.'};
    throw new UserError(messages[response.status]||'Não foi possível confirmar a validação. Seu rascunho permanece salvo.',response.status===403?403:502);

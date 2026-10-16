@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
 import {makeDraft,applyForm,preparePayload,pictureUrl} from './drafts.mjs';
-import {createMeli} from './meli.mjs';
+import {createMeli,shippingSummary} from './meli.mjs';
 import {createApp} from './server.mjs';
 import {SetupSessions} from './store.mjs';
 import {vault,hash,random,UserError} from './security.mjs';
@@ -38,6 +38,7 @@ function apiFixture(validate){
  const crypto=vault('test-encryption-key-at-least-thirty-two-characters');let row={user_id:'123',encrypted:crypto.seal({access:'test-token',refresh:'test-refresh'}),expires:Date.now()+3600000,status:'ready'};
  const calls=[];const service=createMeli({store:{withConnection:async fn=>fn({get:async()=>row,save:async r=>{row=r;}})},crypto,clientId:'test',clientSecret:'secret',baseUrl:'https://app.example',fetcher:async(url,options)=>{
   calls.push({url,options});if(url.endsWith('/items/validate'))return validate(options);
+  if(url.endsWith('/shipping_preferences'))return Response.json({modes:['me2'],logistics:[{mode:'me2',types:[{type:'drop_off'}]}],access_token:'DO_NOT_SHOW',address:'PRIVATE'});
   if(url.endsWith('/users/me'))return Response.json(source.profile);
   if(url.endsWith('/attributes'))return Response.json(schema);
   if(url.includes('/categories/'))return Response.json(category);
@@ -115,4 +116,18 @@ test('HTTP error containing only warnings is never treated as validated',async()
  const f=apiFixture(()=>Response.json({cause:[{code:'notice',message:'<script>warning</script>',type:'warning'}]},{status:400}));
  const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));assert.equal(result.ok,false);assert.match(result.issues[0],/não confirmou/);
  const html=editor({id:random(),revision:1,data:{...draft(),validation:result}},{csrf:'csrf'});assert.ok(!html.includes('<script>warning'));assert.ok(html.includes('&lt;script&gt;'));
+});
+
+test('shipping diagnostics preserve the sent mode, consult preferences and omit unrelated private data',async()=>{
+ const f=apiFixture(()=>Response.json({cause:[{code:'shipping.lost_me1_by_user',message:'User has not mode me1',type:'warning'},{code:'item.shipping.mandatory_free_shipping',message:'Mandatory free shipping added',type:'warning'}]},{status:400}));
+ const d=applyForm(draft(),formFor(draft()));const result=await f.service.validateDraft(d);
+ assert.equal(result.ok,false);assert.deepEqual(result.shippingDiagnostic.sent.shipping,d.shipping);assert.equal(result.shippingDiagnostic.sent.shipping.mode,'me2');assert.equal(result.shippingDiagnostic.sent.shipping.free_shipping,true);
+ assert.deepEqual(result.shippingDiagnostic.seller.data.modes,['me2']);assert.equal(result.shippingDiagnostic.causes[0].type,'warning');
+ assert.ok(f.calls.some(c=>c.url.endsWith('/users/123/shipping_preferences')));assert.ok(f.calls.some(c=>c.url.endsWith('/categories/MLB190954/shipping_preferences')));
+ assert.ok(!JSON.stringify(result).includes('DO_NOT_SHOW'));assert.ok(!JSON.stringify(result).includes('PRIVATE'));assert.equal(f.calls.filter(c=>c.options.method==='POST').length,1);
+ const html=editor({id:random(),revision:1,data:{...d,validation:result}},{csrf:'csrf'});assert.match(html,/Diagnóstico de frete/);assert.match(html,/me2/);
+});
+test('shipping preference summary projects only known fields',()=>{
+ assert.deepEqual(shippingSummary({modes:['me2'],shipping_modes:['me2'],logistics:[{mode:'me2',type:'drop_off',types:[{type:'cross_docking',address:'private'}],token:'private'}],token:'private'}),{modes:['me2'],shipping_modes:['me2'],logistics:[{mode:'me2',type:'drop_off',types:['cross_docking']}]});
+ assert.deepEqual(shippingSummary(null),{});
 });
