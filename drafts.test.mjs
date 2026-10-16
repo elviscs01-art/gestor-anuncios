@@ -17,7 +17,7 @@ test('import keeps editable values but strips source identity and asks for new q
  const updated=applyForm(d,formFor(d));const {payload,issues}=preparePayload(updated);assert.deepEqual(issues,[]);
  assert.equal(payload.family_name,'Evaporador Densul');assert.equal(payload.available_quantity,2);assert.equal(payload.price,329);assert.equal(payload.official_store_id,8);
  for(const key of ['id','seller_id','user_product_id','catalog_product_id','status','title','description','variations','compatibilities'])assert.equal(payload[key],undefined);
- assert.equal(payload.shipping.logistic_type,undefined);assert.deepEqual(payload.attributes,[{id:'BRAND',value_id:'123'},{id:'MODEL',value_name:'A'}]);
+ assert.equal(payload.shipping.logistic_type,undefined);assert.deepEqual(payload.attributes,[{id:'BRAND',value_name:'DENSUL'},{id:'MODEL',value_name:'A'}]);
 });
 test('changes clear previous validation, decimal comma works and fields cannot inject metadata',()=>{
  const d=draft();d.validation={ok:true};const f=formFor(d);f.set('price','419,90');f.set('sellerId','999');f.set('categoryId','INVALID');f.set('attr:BRAND','Outra');
@@ -94,4 +94,25 @@ test('failed validator preserves saved inputs and returns editable draft',async(
  const h=serverFixture();const {cookie,csrf}=await h.login();const id=random();await h.store.createDraft(id,'123',draft());h.meli.validateDraft=async()=>{throw new UserError('Sem resposta do validador.',502);};
  const f=formFor(draft());f.set('csrf',csrf);f.set('draftId',id);f.set('revision','1');f.set('name','Meu rascunho salvo');
  const result=await h.request('/rascunhos/validar','POST',f,{cookie});assert.equal(result.status,502);assert.match(result.body,/Meu rascunho salvo/);assert.equal((await h.store.getDraft(id,'123')).data.values.name,'Meu rascunho salvo');
+});
+
+test('custom brand always sends its displayed name, never an unresolved imported ID',()=>{
+ for(const id of ['123','-1','',null]){
+  const d=draft();d.originals.BRAND.value_id=id;
+  const prepared=preparePayload(applyForm(d,formFor(d)));
+  assert.deepEqual(prepared.payload.attributes.find(a=>a.id==='BRAND'),{id:'BRAND',value_name:'DENSUL'});
+ }
+ const d=draft();d.schema[0]={...d.schema[0],values:[{id:'456',name:'DENSUL'}]};
+ assert.deepEqual(preparePayload(applyForm(d,formFor(d))).payload.attributes.find(a=>a.id==='BRAND'),{id:'BRAND',value_id:'456',value_name:'DENSUL'});
+});
+test('validator distinguishes warnings from blocking errors without inferring severity from code',async()=>{
+ const f=apiFixture(()=>Response.json({cause:[{code:'item.attribute.invalid',message:'BRAND missing',type:'error'},{code:'shipping.lost_me1_by_user',message:'User has not mode me1',type:'warning'},{code:'item.shipping.mandatory_free_shipping',message:'Mandatory free shipping added',type:'warning'}]},{status:400}));
+ const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));
+ assert.equal(result.ok,false);assert.equal(result.issues.length,1);assert.equal(result.warnings.length,2);assert.match(result.issues[0],/BRAND/);
+ const html=editor({id:random(),revision:1,data:{...draft(),validation:result}},{csrf:'csrf'});assert.match(html,/Avisos do Mercado Livre/);assert.match(html,/Mandatory free shipping/);
+});
+test('HTTP error containing only warnings is never treated as validated',async()=>{
+ const f=apiFixture(()=>Response.json({cause:[{code:'notice',message:'<script>warning</script>',type:'warning'}]},{status:400}));
+ const result=await f.service.validateDraft(applyForm(draft(),formFor(draft())));assert.equal(result.ok,false);assert.match(result.issues[0],/não confirmou/);
+ const html=editor({id:random(),revision:1,data:{...draft(),validation:result}},{csrf:'csrf'});assert.ok(!html.includes('<script>warning'));assert.ok(html.includes('&lt;script&gt;'));
 });

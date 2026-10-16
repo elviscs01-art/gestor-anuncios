@@ -39,13 +39,13 @@ export function preparePayload(draft,schema=draft.schema,categorySettings=draft.
   const value=String(v.attributes[a.id]||'').trim();
   if(!value){if(a.tags?.required||(a.tags?.new_required&&v.condition==='new'))issues.push('Preencha o atributo: '+(a.name||a.id)+'.');continue;}
   const original=draft.originals[a.id];
-  if(original&&value===text(original)){
-   if(original.values?.length>1)attributes.push({id:a.id,values:original.values.map(x=>({...x.id?{id:x.id}:{},...x.name?{name:x.name}:{}}))});
-   else attributes.push({id:a.id,...original.value_id!=null?{value_id:String(original.value_id)}:{value_name:value}});
-  }else{
-   const option=a.values?.find(x=>x.name===value);
-   attributes.push({id:a.id,...option?{value_id:String(option.id)}:{value_name:value}});
-  }
+  const encode=name=>{
+   const option=a.values?.find(x=>x.name===name&&x.id!=null&&String(x.id)!=='-1');
+   return {...option?{value_id:String(option.id)}:{},value_name:name};
+  };
+  if(original?.values?.length>1&&value===text(original)){
+   attributes.push({id:a.id,values:original.values.map(x=>{const v=encode(String(x.name||''));return {...v.value_id?{id:v.value_id}:{},name:v.value_name};})});
+  }else attributes.push({id:a.id,...encode(value)});
  }
  const payload={category_id:draft.categoryId,currency_id:'BRL',price:Number(v.price.replace(',','.')),available_quantity:Number(v.quantity),buying_mode:'buy_it_now',listing_type_id:v.listingType,condition:v.condition,pictures:v.pictureIds.map(id=>({id})),attributes};
  payload[draft.mode==='family'?'family_name':'title']=v.name;

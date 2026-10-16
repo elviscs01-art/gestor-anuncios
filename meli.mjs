@@ -76,9 +76,13 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    if([400,422].includes(response.status)){
     let data;try{data=await response.json();}catch{throw new UserError('Resposta inesperada do validador. O rascunho permanece salvo.',502);}
     const causes=Array.isArray(data.cause)?data.cause:[];
-    const issues=causes.slice(0,60).map(c=>[c.code,c.message].filter(x=>typeof x==='string').join(': ').slice(0,1800)).filter(Boolean);
-    if(!issues.length)issues.push('O Mercado Livre recusou os dados enviados'+(typeof data.error==='string'?': '+data.error.slice(0,120):'.'));
-    return {ok:false,stage:'remote',issues,checkedAt:new Date(now()).toISOString()};
+    const issues=[],warnings=[];
+    for(const cause of causes.slice(0,60)){
+     const message=[cause.code,cause.message].filter(x=>typeof x==='string').join(': ').slice(0,1800);
+     if(message)(cause.type==='warning'?warnings:issues).push(message);
+    }
+    if(!issues.length)issues.push(warnings.length?'O Mercado Livre retornou avisos, mas não confirmou a validação (HTTP '+response.status+').':'O Mercado Livre recusou os dados enviados'+(typeof data.error==='string'?': '+data.error.slice(0,120):'.'));
+    return {ok:false,stage:'remote',issues,warnings,httpStatus:response.status,checkedAt:new Date(now()).toISOString()};
    }
    const messages={401:'Reconecte sua conta para validar.',403:'O Mercado Livre negou a validação. Confira a permissão de publicação com leitura e escrita.',429:'Limite de consultas atingido. Aguarde antes de validar novamente.'};
    throw new UserError(messages[response.status]||'Não foi possível confirmar a validação. Seu rascunho permanece salvo.',response.status===403?403:502);

@@ -1,3 +1,11 @@
+# Correção 0.3.1 — marca e mensagens do validador
+
+Esta atualização corrige o envio de atributos, incluindo marcas próprias: o texto preenchido é sempre enviado em value_name; identificadores importados só são reaproveitados quando correspondem a uma opção da ficha atual da categoria. Isso evita omitir a marca e depender de um identificador não resolvido.
+
+As mensagens com type=warning passam a aparecer em Avisos do Mercado Livre, separadas das demais causas. Uma resposta HTTP de erro nunca é tratada como validação aprovada, mesmo que contenha somente avisos.
+
+Envie os arquivos deste pacote na raiz do GitHub, substituindo os de mesmo nome. Aguarde o Render atualizar e abra o rascunho já salvo em Meus rascunhos. Clique novamente em Salvar e validar no Mercado Livre. Não é preciso recriar o rascunho, mudar a marca, apagar dados ou alterar as variáveis do Render. As mensagens antigas só são substituídas após a nova validação.
+
 # Gestor de anúncios — versão 0.3
 
 ## Atualização para quem já está conectado
