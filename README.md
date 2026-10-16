@@ -1,3 +1,7 @@
+# Correção 0.8.1 — Consulta inicial
+
+A busca geral de pedidos agora omite a lista composta de status. Cancelados são consultados separadamente, com paginação e deduplicação por pedido. Erros da API informam HTTP, etapa e código técnico quando disponível, sem mostrar tokens ou dados de compradores. A causa na conta real ainda depende de verificação após o deploy. Atualize os arquivos de mesmo nome e clique em Atualizar resumo. Não é necessário alterar as permissões antecipadamente.
+
 # Atualização 0.8.0 — Início e navegação
 
 Extraia o pacote e envie os arquivos para a raiz do mesmo repositório no GitHub, substituindo os de mesmo nome. Não envie o ZIP nem crie uma subpasta. Aguarde o deploy no Render; o log deve indicar Gestor 0.8.0 iniciado. Não é necessário trocar credenciais ou apagar banco, rascunhos ou anúncios.

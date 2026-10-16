@@ -22,6 +22,8 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   if(!response.ok){
    const messages={401:'O acesso não foi autorizado. Reconecte sua conta.',403:'O Mercado Livre negou esta consulta. Confira as permissões do aplicativo e a conta autorizada.',404:'O recurso não foi encontrado no Mercado Livre.',429:'O limite de consultas foi atingido. Aguarde antes de tentar novamente.'};
    const error=new UserError(messages[response.status]||'O Mercado Livre não concluiu a solicitação. Confira a configuração e tente novamente.',response.status>=500?502:response.status);
+   const code=typeof data?.error==='string'&&/^[a-zA-Z0-9_.-]{1,80}$/.test(data.error)?data.error:'';
+   error.message+=' (HTTP '+response.status+(code?'; código '+code:'')+').';
    error.remoteStatus=response.status;throw error;
   }
   return data;
@@ -103,9 +105,10 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio de outra conta.',403);
    return {id,title:String(item.title||item.family_name||id),status:item.status,created:item.date_created,price:item.price,currency:item.currency_id,quantity:item.available_quantity,sold:item.sold_quantity,skus:[...new Set([item.seller_custom_field,...(item.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name),...(item.variations||[]).flatMap(v=>[v.seller_custom_field,...(v.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name)])].filter(Boolean))]};
   },
-  async dashboardOrders(owner,{from,to,offset=0,paidOnly=false}){
-   const params=new URLSearchParams({seller:String(owner),'order.date_created.from':from,'order.date_created.to':to,'order.status':paidOnly?'paid':'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,invalid',sort:'date_desc',limit:'50',offset:String(offset)});
-   const data=await get('/orders/search?'+params);
+  async dashboardOrders(owner,{from,to,offset=0,paidOnly=false,cancelledOnly=false}){
+   const params=new URLSearchParams({seller:String(owner),'order.date_created.from':from,'order.date_created.to':to,sort:'date_desc',limit:'50',offset:String(offset)});
+   if(paidOnly||cancelledOnly)params.set('order.status',paidOnly?'paid':'cancelled');
+   let data;try{data=await get('/orders/search?'+params);}catch(error){if(error instanceof UserError)throw new UserError('Consulta de pedidos '+(cancelledOnly?'cancelados':'da conta')+': '+error.message,error.status);throw error;}
    if(!Array.isArray(data.results)||!Number.isSafeInteger(data.paging?.total)||data.paging.total<0||data.paging.offset!==offset)throw new UserError('Não foi possível confirmar a paginação das vendas.',502);
    const rows=data.results.map(o=>{
     if(String(o.seller?.id)!==String(owner)||!/^\d+$/.test(String(o.id))||!Number.isFinite(Date.parse(o.date_created))||Date.parse(o.date_created)<Date.parse(from)||Date.parse(o.date_created)>Date.parse(to))throw new UserError('A consulta retornou um pedido fora da conta ou do período.',502);
