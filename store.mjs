@@ -1,3 +1,4 @@
+import {createTestStore} from './test-store.mjs';
 // PostgreSQL is the only token store. Temporary sessions are used solely before database setup.
 export class SetupSessions {
  constructor(){this.sessions=new Map();this.attempts=[];}
@@ -55,5 +56,6 @@ export async function postgres(url) {
   },
   async close(){await pool.end();}
  };
+ store.testing=await createTestStore(pool,store);
  return store;
 }

@@ -72,3 +72,12 @@ test('revoked token gets one refresh and optional failure remains explicit',asyn
  });
  await connect(f);const result=await f.service.inspect('MLB4155100949');assert.equal(exchanges,2);assert.match(result.compatibility.error,/permissões/);assert.ok(!JSON.stringify(result).includes('SHOULD_NOT_LEAK'));
 });
+
+test('test OAuth rejects real account and preserves main connection',async()=>{
+ const f=fixture(async url=>url.endsWith('/oauth/token')?response(tokens()):response({id:123,site_id:'MLB',tags:[]}),{requireTestUser:true});
+ f.store.expectedSeller=async()=> '123';
+ await assert.rejects(connect(f),/conta de teste/);assert.equal(f.store.row,null);
+});
+test('OAuth state cannot cross main and test connections',async()=>{
+ const f=fixture(async()=>{throw Error('must not exchange');});await assert.rejects(f.service.complete({state:'test.any',sessionId:'session',code:'CODE'}));
+});

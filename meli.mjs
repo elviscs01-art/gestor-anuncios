@@ -1,4 +1,4 @@
-import {makeDraft,preparePayload} from './drafts.mjs';
+import {makeDraft,preparePayload,pictureUrl} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
 const API='https://api.mercadolibre.com';
 export function shippingSummary(data){
@@ -11,7 +11,7 @@ export function shippingSummary(data){
  });
  return result;
 }
-export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',fetcher=fetch,now=Date.now}){
+export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',requireTestUser=false,fetcher=fetch,now=Date.now}){
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
  async function call(path,{token,form}={}){
   let response;
@@ -58,8 +58,77 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   try{return await call(path,{token});}
   catch(error){if(error.remoteStatus!==401)throw error;const renewed=await access(token);return call(path,{token:renewed});}
  }
+ async function testAccess(expected){
+  if(!requireTestUser)throw new UserError('Publicação disponível somente na conexão de teste.',403);
+  const registered=await store.expectedSeller();
+  if(!registered||String(registered)!==String(expected))throw new UserError('A conta de teste não corresponde ao cadastro deste aplicativo.',403);
+  let token=await access();let profile;
+  try{profile=await call('/users/me',{token});}catch(error){if(error.remoteStatus!==401)throw error;token=await access(token);profile=await call('/users/me',{token});}
+  if(String(profile.id)!==String(expected)||!profile.tags?.includes('test_user')||profile.site_id!=='MLB')throw new UserError('Envio bloqueado: a conta precisa ser a conta brasileira de teste cadastrada.',403);
+  return {token,profile};
+ }
+ async function mutation(path,token,body,method='POST'){
+  let response;
+  try{response=await fetcher(API+path,{method,redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(body)});}
+  catch{const e=new UserError('Não foi possível confirmar a resposta. O envio não será repetido automaticamente.',502);e.uncertain=true;throw e;}
+  let data;try{data=await response.json();}catch{const e=new UserError('A resposta não pôde ser interpretada. Confira o resultado antes de outra tentativa.',502);e.uncertain=true;throw e;}
+  if(!response.ok){
+   const causes=Array.isArray(data.cause)?data.cause:[];
+   const message=causes.slice(0,12).map(c=>[c?.code,c?.message].filter(v=>typeof v==='string').join(': ').slice(0,1200)).filter(Boolean).join('\n');
+   const e=new UserError('Mercado Livre retornou HTTP '+response.status+'. '+(message||String(data.message||data.error||'Solicitação recusada.').slice(0,500)),response.status>=500?502:response.status);
+   e.uncertain=response.status>=500;throw e;
+  }
+  return data;
+ }
  return {
   redirectUri,
+  async createTestUser(){
+   if(requireTestUser)throw new UserError('Use a conexão principal para gerar a conta de teste.',403);
+   const token=await access();const result=await mutation('/users/test_user',token,{site_id:'MLB'});
+   if(!/^[0-9]+$/.test(String(result.id))||!result.nickname||!result.password){const e=new UserError('A criação da conta retornou dados incompletos. Não repita automaticamente.',502);e.uncertain=true;throw e;}
+   return {id:String(result.id),nickname:String(result.nickname),password:String(result.password)};
+  },
+  async prepareTest(draft,expected){
+   const {profile}=await testAccess(expected);
+   const [category,schema]=await Promise.all([get('/categories/'+draft.categoryId),get('/categories/'+draft.categoryId+'/attributes')]);
+   if(category.id!==draft.categoryId||!Array.isArray(schema))throw new UserError('Não foi possível consultar a categoria do teste.',502);
+   const copy=structuredClone(draft);copy.sellerId=String(profile.id);copy.mode=profile.tags.includes('user_product_seller')?'family':'title';copy.officialStoreId=null;
+   copy.values.name='Item de Teste - Por favor, NAO OFERTAR!';copy.values.quantity='1';copy.values.listingType='gold_special';
+   const modes=Array.isArray(profile.shipping_modes)?profile.shipping_modes:[];
+   if(modes.includes('me2'))copy.shipping={mode:'me2',free_shipping:true,local_pick_up:false};
+   else if(modes.includes('not_specified'))copy.shipping={mode:'not_specified',free_shipping:false,local_pick_up:true};
+   else throw new UserError('A conta de teste não retornou uma modalidade de envio compatível com este fluxo.',409);
+   const prepared=preparePayload(copy,schema,category.settings||{});
+   if(prepared.issues.length)throw new UserError(prepared.issues.join(' '));
+   const pictures=copy.values.pictureIds.map(id=>pictureUrl(copy.pictures.find(p=>p.id===id)?.url));
+   if(pictures.some(url=>!url))throw new UserError('Uma foto não tem endereço utilizável. Consulte o anúncio e crie outro rascunho para atualizar as fotos.');
+   prepared.payload.pictures=pictures.map(source=>({source}));
+   return {payload:prepared.payload,description:'ITEM DE TESTE - POR FAVOR, NAO OFERTAR!\n\n'+copy.values.description.slice(0,49000),sellerId:String(profile.id),mode:copy.mode};
+  },
+  async createTestListing(snapshot,expected){
+   const {token}=await testAccess(expected);
+   if(snapshot.sellerId!==String(expected)||snapshot.payload.available_quantity!==1||snapshot.payload.listing_type_id!=='gold_special'||(snapshot.payload.family_name||snapshot.payload.title)!=='Item de Teste - Por favor, NAO OFERTAR!'||snapshot.payload.official_store_id!=null||snapshot.payload.user_product_id!=null)throw new UserError('Dados de teste inválidos. Prepare o teste novamente.',403);
+   const item=await mutation('/items',token,snapshot.payload);
+   if(!/^MLB[0-9]+$/.test(item.id||'')||String(item.seller_id)!==String(expected)){const e=new UserError('A criação retornou identificação inesperada. Confira a conta de teste antes de outra tentativa.',502);e.uncertain=true;throw e;}
+   return {id:item.id,status:String(item.status||'não informado')};
+  },
+  async describeTestListing(itemId,expected,description){
+   const {token}=await testAccess(expected);
+   if(!/^MLB[0-9]+$/.test(itemId))throw new UserError('Anúncio de teste inválido.');
+   const item=await call('/items/'+itemId,{token});
+   if(String(item.seller_id)!==String(expected))throw new UserError('Anúncio fora da conta de teste.',403);
+   await mutation('/items/'+itemId+'/description',token,{plain_text:description});
+  },
+  async pauseTestListing(itemId,expected){
+   const {token}=await testAccess(expected);
+   if(!/^MLB[0-9]+$/.test(itemId))throw new UserError('Anúncio de teste inválido.');
+   const item=await call('/items/'+itemId,{token});
+   if(String(item.seller_id)!==String(expected))throw new UserError('Anúncio fora da conta de teste.',403);
+   if(item.status==='paused'||item.status==='closed')return String(item.status);
+   const result=await mutation('/items/'+itemId,token,{status:'paused'},'PUT');
+   if(result.status!=='paused')throw new UserError('A pausa ainda não foi confirmada pelo Mercado Livre.',409);
+   return 'paused';
+  },
   async draftSource(itemId){
    const result=await this.inspect(itemId);
    if(!/^MLB[0-9]+$/.test(result.item.category_id||''))throw new UserError('Categoria do anúncio inválida.',502);
@@ -104,9 +173,9 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const messages={401:'Reconecte sua conta para validar.',403:'O Mercado Livre negou a validação. Confira a permissão de publicação com leitura e escrita.',429:'Limite de consultas atingido. Aguarde antes de validar novamente.'};
    throw new UserError(messages[response.status]||'Não foi possível confirmar a validação. Seu rascunho permanece salvo.',response.status===403?403:502);
   },
-  async begin(sessionId){const state=random(),verifier=random();await store.putFlow(hash(state),sessionId,crypto.seal(verifier,'pkce'));const url=new URL('https://auth.mercadolivre.com.br/authorization');for(const [k,v] of Object.entries({response_type:'code',client_id:clientId,redirect_uri:redirectUri,state,code_challenge:challenge(verifier),code_challenge_method:'S256'}))url.searchParams.set(k,v);return url.href;},
+  async begin(sessionId){const state=(requireTestUser?'test.':'')+random(),verifier=random();await store.putFlow(hash(state),sessionId,crypto.seal(verifier,'pkce'));const url=new URL('https://auth.mercadolivre.com.br/authorization');for(const [k,v] of Object.entries({response_type:'code',client_id:clientId,redirect_uri:redirectUri,state,code_challenge:challenge(verifier),code_challenge_method:'S256'}))url.searchParams.set(k,v);return url.href;},
   async complete({state,code,denied,sessionId}){
-   if(!state||state.length>200)throw new UserError('Autorização inválida ou expirada. Inicie a conexão novamente.');
+   if(!state||state.length>200||state.startsWith('test.')!==requireTestUser)throw new UserError('Autorização inválida ou expirada. Inicie a conexão novamente.');
    const saved=await store.takeFlow(hash(state),sessionId);
    if(!saved)throw new UserError('Autorização inválida, expirada ou já utilizada. Inicie a conexão novamente.');
    if(denied)throw new UserError('A autorização foi cancelada no Mercado Livre.');
@@ -114,6 +183,10 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const verifier=crypto.open(saved,'pkce');
    await store.withConnection(async db=>{
     const data=await call('/oauth/token',{form:{grant_type:'authorization_code',client_id:clientId,client_secret:clientSecret,code,redirect_uri:redirectUri,code_verifier:verifier}});
+    if(requireTestUser){
+     const profile=await call('/users/me',{token:data.access_token});const expected=await store.expectedSeller();
+     if(!expected||String(profile.id)!==String(expected)||String(data.user_id)!==String(expected)||!profile.tags?.includes('test_user')||profile.site_id!=='MLB')throw new UserError('Conecte a conta de teste cadastrada, não a conta da loja.',403);
+    }
     const row=normalize(data),old=await db.get();
     if(old&&String(old.user_id)!==row.user_id)throw new UserError('Este aplicativo já está vinculado a outro vendedor. Use a mesma conta para reconectar.',403);
     await db.save(row);

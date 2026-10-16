@@ -1,3 +1,5 @@
+import {createLab} from './test-lab.mjs';
+import * as testView from './test-views.mjs';
 import {applyForm} from './drafts.mjs';
 import * as draftsView from './draft-views.mjs';
 import http from 'node:http';
@@ -15,7 +17,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -64,10 +66,38 @@ export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}
     return redirect(await meli.begin(sessionId));
    }
    if(path==='/oauth/mercadolivre/callback'&&req.method==='GET'){
-    if(missing.length||!meli)return redirect('/?notice=oauth_failed');
-    try{await meli.complete({sessionId,state:url.searchParams.get('state'),code:url.searchParams.get('code'),denied:url.searchParams.has('error')});}
-    catch(error){console.error(`oauth_failed:${error instanceof UserError?error.status:'internal'}`);return redirect('/?notice=oauth_failed');}
-    return redirect('/?notice=connected');
+    const isTest=(url.searchParams.get('state')||'').startsWith('test.');
+    const service=isTest?testMeli:meli,back=isTest?'/testes':'/';
+    if(missing.length||!service)return redirect(back+'?notice='+(isTest?'auth_failed':'oauth_failed'));
+    try{await service.complete({sessionId,state:url.searchParams.get('state'),code:url.searchParams.get('code'),denied:url.searchParams.has('error')});}
+    catch(error){console.error('oauth_failed:'+(error instanceof UserError?error.status:'internal'));return redirect(back+'?notice='+(isTest?'auth_failed':'oauth_failed'));}
+    return redirect(back+'?notice=connected');
+   }
+   if(path==='/testes'||path.startsWith('/testes/')){
+    if(missing.length||!lab||!testMeli)throw new UserError('Conclua a configuração do aplicativo primeiro.',409);
+    const connection=await store.summary();
+    if(!connection?.user_id)throw new UserError('Conecte a conta principal primeiro.',409);
+    const owner=String(connection.user_id);
+    if(path==='/testes'&&req.method==='GET')return send(200,testView.home(await lab.home(owner),session,url.searchParams.get('notice')));
+    if(path==='/testes/conta'&&req.method==='POST'){await lab.createAccount();return redirect('/testes');}
+    if(path==='/testes/conectar'&&req.method==='POST'){
+     if(!(await store.testing.expectedSeller()))throw new UserError('Gere a conta de teste primeiro.',409);
+     return redirect(await testMeli.begin(sessionId));
+    }
+    if(path==='/testes/preparar'&&req.method==='POST'){
+     const id=form.get('draftId')||'',revision=Number(form.get('revision'));
+     if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!Number.isSafeInteger(revision)||revision<1)throw new UserError('Rascunho inválido.');
+     const row=await lab.prepare(owner,id,revision);return redirect('/testes/resultado/'+row.id);
+    }
+    const route=path.match(/^[/]testes[/]resultado[/]([A-Za-z0-9_-]{43})$/);
+    if(route&&req.method==='GET')return send(200,testView.attempt(await lab.result(route[1],owner),session));
+    if(['/testes/publicar','/testes/pausar'].includes(path)&&req.method==='POST'){
+     const id=form.get('attemptId')||'';
+     if(!/^[A-Za-z0-9_-]{43}$/.test(id))throw new UserError('Teste inválido.');
+     if(path==='/testes/publicar'&&form.get('confirm')!=='test')throw new UserError('Confirme a criação na conta de teste.');
+     if(path==='/testes/publicar')await lab.run(id,owner);else await lab.pause(id,owner);
+     return redirect('/testes/resultado/'+id);
+    }
    }
    if(path==='/anuncio'&&req.method==='POST'){
     if(!meli||missing.length)throw new UserError('Configure e conecte a conta primeiro.',409);
@@ -121,8 +151,10 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const crypto=settings.key?vault(settings.key):null;
   const store=settings.databaseUrl?await postgres(settings.databaseUrl):new SetupSessions();
   const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?createMeli({store,crypto,...settings}):null;
-  const {server}=createApp({settings,store,meli});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.3.3 iniciado.'));
+  const testMeli=meli?createMeli({...settings,store:store.testing,crypto,expectedSeller:'',requireTestUser:true}):null;
+  const lab=meli?createLab({store,live:meli,test:testMeli,crypto}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.4.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

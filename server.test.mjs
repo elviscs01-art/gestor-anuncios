@@ -81,3 +81,16 @@ test('form policy preserves origin and rejects opaque or missing origins',async(
  }
  assert.equal((await post('/login',{password})).status,303);
 });
+
+test('test creation routes enforce login, origin, CSRF and explicit confirmation',async()=>{
+ let calls=0;const store=new SetupSessions();store.summary=async()=>({user_id:'real'});
+ const h=harness({store,settings:{...settings,databaseUrl:'yes',key:'yes',clientId:'1',clientSecret:'yes'},testMeli:{},lab:{run:async()=>{calls++;}}});
+ const body={attemptId:'a'.repeat(43),confirm:'test'};
+ assert.equal((await h.post('/testes/publicar',body)).headers.location,'/login');
+ const {cookie,session}=await h.login();
+ assert.equal((await h.post('/testes/publicar',body,{cookie})).status,403);
+ assert.equal((await h.post('/testes/publicar',{...body,csrf:session.csrf},{cookie,origin:'https://other.example'})).status,403);
+ assert.equal((await h.post('/testes/publicar',{attemptId:body.attemptId,csrf:session.csrf},{cookie})).status,400);
+ assert.equal(calls,0);
+ assert.equal((await h.post('/testes/publicar',{...body,csrf:session.csrf},{cookie})).status,303);assert.equal(calls,1);
+});
