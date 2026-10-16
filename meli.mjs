@@ -1,3 +1,4 @@
+import {replicationSource,compatibilityPlan} from './replication.mjs';
 import {makeDraft,preparePayload,pictureUrl} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
 const API='https://api.mercadolibre.com';
@@ -175,6 +176,47 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    return row;
   },
 
+  async replicationSource(id,owner){
+   const {profile}=await officialAccess(owner),{item}=await ownedOfficial(id,owner);
+   const [category,schema]=await Promise.all([get('/categories/'+item.category_id),get('/categories/'+item.category_id+'/attributes')]);
+   let description;try{description=await get('/items/'+id+'/description');}catch(e){if(e.remoteStatus===404)description={plain_text:''};else throw e;}
+   let compatibility;try{compatibility=await get('/items/'+id+'/compatibilities?extended=true');}catch(e){if(e.remoteStatus===404&&!item.attributes?.some(a=>a.id==='HAS_COMPATIBILITIES'&&(a.value_id==='242085'||String(a.value_name).toLowerCase()==='sim')))compatibility={products:[]};else throw e;}
+   const source=replicationSource({item,profile,category,schema,description,compatibility});
+   if(source.compatibilities.length>200)throw new UserError('Este anúncio tem mais de 200 compatibilidades. A cópia integral desse volume requer um fluxo adicional.',409);
+   return source;
+  },
+  async validateReplication(snapshot,owner){
+   const {token}=await officialAccess(owner);if(snapshot.sellerId!==String(owner))throw new UserError('Lote de outra conta.',403);
+   let response;try{response=await fetcher(API+'/items/validate',{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(snapshot.payload)});}catch{throw new UserError('O validador não respondeu. Nenhum anúncio deste lote foi enviado.',502);}
+   if(response.status===204)return {ok:true};
+   let data;try{data=await response.json();}catch{throw new UserError('Resposta inesperada na validação do lote.',502);}
+   const causes=Array.isArray(data.cause)?data.cause:[],warnings=causes.filter(c=>c.type==='warning').map(c=>String(c.code||'')+': '+String(c.message||''));
+   if(response.status===400&&causes.length&&causes.every(c=>c.type==='warning'))return {ok:true,warnings};
+   if(response.ok&&data.valid===true)return {ok:true,warnings};
+   return {ok:false,message:'Validação recusada (HTTP '+response.status+'). '+causes.slice(0,15).map(c=>String(c.code||'')+': '+String(c.message||'')).join(' '),warnings};
+  },
+  async applyReplicationCompatibilities(id,owner,products){
+   if(!products.length)return;
+   const {token,item}=await ownedOfficial(id,owner);
+   const groups=new Map();for(const p of products){if(!groups.has(p.domain))groups.set(p.domain,[]);const {domain,...body}=p;groups.get(domain).push(body);}
+   for(const [domain,rows] of groups){const path=item.user_product_id?'/user-products/'+encodeURIComponent(item.user_product_id)+'/compatibilities':'/items/'+id+'/compatibilities';
+    await mutation(path,token,{...(item.user_product_id?{domain_id:domain,category_id:item.category_id}:{}),products:rows});
+   }
+  },
+  async verifyReplication(id,owner,snapshot){
+   const {item}=await ownedOfficial(id,owner),expected=snapshot.payload;
+   const differences=[];for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key])differences.push(key);
+   const sameValue=(a,b)=>{if(!b)return false;if(a.value_id!=null)return String(a.value_id)===String(b.value_id);if(a.values)return JSON.stringify(a.values.map(v=>v.id??v.name).sort())===JSON.stringify((b.values||[]).map(v=>v.id??v.name).sort());return String(a.value_name??'')===String(b.value_name??'');};
+   for(const a of expected.attributes||[])if(!sameValue(a,item.attributes?.find(b=>b.id===a.id)))differences.push('atributo '+a.id);
+   for(const a of expected.sale_terms||[])if(!sameValue(a,item.sale_terms?.find(b=>b.id===a.id)))differences.push('condição '+a.id);
+   if(JSON.stringify(expected.pictures.map(p=>p.id).sort())!==JSON.stringify((item.pictures||[]).map(p=>p.id).sort()))differences.push('fotos');
+   for(const key of ['mode','free_shipping','local_pick_up'])if(expected.shipping?.[key]!=null&&expected.shipping[key]!==item.shipping?.[key])differences.push('envio '+key);
+   const description=await get('/items/'+id+'/description').catch(e=>{if(e.remoteStatus===404)return {plain_text:''};throw e;});if(description.plain_text!==snapshot.description)differences.push('descrição');
+   const compat=await get('/items/'+id+'/compatibilities?extended=true').catch(e=>{if(e.remoteStatus===404&&!snapshot.compatibilities.length)return {products:[]};throw e;});
+   const got=compatibilityPlan(compat),canonical=p=>JSON.stringify([p.id,p.domain,p.note||'',p.restrictions||[]]);const expectedSet=new Set(snapshot.compatibilities.map(canonical));if(got.length!==expectedSet.size||got.some(p=>!expectedSet.has(canonical(p))))differences.push('compatibilidades');
+   if(differences.length)throw new UserError('Anúncio criado, mas a conferência encontrou diferença em: '+differences.join(', ')+'. Ele permanece pausado para revisão.',409);
+  },
+  async activateReplication(id,owner){const {token}=await ownedOfficial(id,owner);const result=await mutation('/items/'+id,token,{status:'active'},'PUT');if(result.status!=='active')throw new UserError('Ativação não confirmada. Confira o anúncio criado.',409);return 'active';},
   async prepareOfficial(draft,expected){
    const {profile}=await officialAccess(expected);
    if(draft.sellerId!==String(expected))throw new UserError('O rascunho pertence a outra conta.',403);

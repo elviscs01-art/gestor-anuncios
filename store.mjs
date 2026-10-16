@@ -1,3 +1,4 @@
+import {createReplicationStore} from './replication-store.mjs';
 import {createMetricsStore} from './metrics-store.mjs';
 import {createPublicationStore} from './publication-store.mjs';
 import {createTestStore} from './test-store.mjs';
@@ -60,6 +61,7 @@ export async function postgres(url) {
  };
  store.testing=await createTestStore(pool,store);
  store.publications=await createPublicationStore(pool);
+ store.replication=await createReplicationStore(pool);
  store.metrics=await createMetricsStore(pool);
  store.dashboard=await createMetricsStore(pool,'dashboard_jobs');
  store.catalog=await createMetricsStore(pool,'catalog_jobs');

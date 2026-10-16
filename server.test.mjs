@@ -39,6 +39,17 @@ test('overview data requires a session and refresh requires origin and csrf',asy
  assert.match((await h.request('/',{headers:{cookie}})).body,/href="\/configuracoes"/);
  assert.match((await h.request('/configuracoes',{headers:{cookie}})).body,/Endereço de retorno/);
 });
+
+test('replication routes bind owner, enforce csrf and preserve invalid title input',async()=>{
+ const store=new SetupSessions();store.summary=async()=>({user_id:'123',status:'ready'});let submitted=0;
+ const id='a'.repeat(43),row={id,status:'editing',data:{source:{sourceId:'MLB123456',sourceTitle:'Original',sourceFamily:'',sellerName:'Densul',payload:{price:100,available_quantity:2},compatibilities:[],maxTitle:60},copies:[{title:'Original',type:'gold_special'}]}};
+ const replication={list:async owner=>{assert.equal(owner,'123');return [];},read:async(i,owner)=>{assert.equal(i,id);assert.equal(owner,'123');return row;},submit:async(i,owner,copies,state)=>{assert.equal(owner,'123');assert.equal(state,'active');submitted++;return {row:{...row,data:{...row.data,copies}},errors:{0:'Altere o título'}};}};
+ const h=harness({store,settings:{...settings,databaseUrl:'configured',key:'configured',clientId:'1',clientSecret:'test'},publications:{},catalog:{read:async()=>null},replication});
+ assert.equal((await h.request('/publicacoes/lista',{headers:{accept:'application/json'}})).status,401);
+ const {cookie,session}=await h.login();assert.match((await h.request('/publicacoes',{headers:{cookie}})).body,/Replicação de anúncios/);
+ const route='/publicacoes/lote/'+id+'/publicar';assert.equal((await h.post(route,{}, {cookie})).status,403);assert.equal(submitted,0);
+ const response=await h.post(route,{csrf:session.csrf,title0:'Original',type0:'gold_pro',finalState:'active'},{cookie});assert.equal(response.status,400);assert.match(response.body,/aria-invalid="true"/);assert.match(response.body,/value="gold_pro" selected/);assert.equal(submitted,1);
+});
 test('login, csrf, logout and protected cookies',async()=>{
  const {post,request,login}=harness();
  assert.equal((await post('/login',{password:'wrong'})).status,401);

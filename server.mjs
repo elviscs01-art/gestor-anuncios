@@ -1,6 +1,9 @@
+import {createReplication} from './replication.mjs';
+import * as replicationView from './replication-views.mjs';
 import {createOverview,range} from './overview.mjs';
 import * as overviewView from './overview-views.mjs';
 import {readFileSync} from 'node:fs';
+const replicationScript=readFileSync(new URL('./replication-client.js',import.meta.url),'utf8');
 const overviewScript=readFileSync(new URL('./overview-client.js',import.meta.url),'utf8');
 const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
 import {createMetrics} from './metrics.mjs';
@@ -26,7 +29,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -38,12 +41,13 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios'].some(p=>req.url.startsWith(p));
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
+   if(req.method==='GET'&&path==='/replication.js')return send(200,replicationScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/overview.js')return send(200,overviewScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsScript,'text/javascript; charset=utf-8');
    if(!['GET','POST'].includes(req.method))return send(405,'Método não permitido.');
@@ -56,7 +60,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    let form;
    if(req.method==='POST'){
     if(!(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded'))throw new UserError('Formato de formulário inválido.',415);
-    let body='';for await(const chunk of req){body+=chunk.toString();if(Buffer.byteLength(body)>(path.startsWith('/rascunhos/')?262144:8192))throw new UserError('Formulário muito grande.',413);}
+    let body='';for await(const chunk of req){body+=chunk.toString();if(Buffer.byteLength(body)>((path.startsWith('/rascunhos/')||path.startsWith('/publicacoes/lote/'))?262144:8192))throw new UserError('Formulário muito grande.',413);}
     form=new URLSearchParams(body);
    }
    if(path==='/login'&&req.method==='POST'){
@@ -128,7 +132,31 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     if(missing.length||!publications)throw new UserError('Configure a conexão principal primeiro.',409);
     const connection=await store.summary();if(!connection?.user_id)throw new UserError('Conecte a conta oficial.',409);
     const owner=String(connection.user_id);
-    if(path==='/publicacoes'&&req.method==='GET')return send(200,publicationView.list(await publications.list(owner),session));
+    if(path==='/publicacoes'&&req.method==='GET')return send(200,replicationView.list(await catalog.read(owner),await replication.list(owner),session,url.searchParams));
+    if(['/publicacoes/lista','/publicacoes/atualizar','/publicacoes/coletar'].includes(path)){
+     if(path==='/publicacoes/atualizar'&&req.method==='POST')await catalog.start(owner);
+     else if(path==='/publicacoes/coletar'&&req.method==='POST')await catalog.advance(owner);
+     else if(!(path==='/publicacoes/lista'&&req.method==='GET'))throw new UserError('Método não permitido.',405);
+     return send(200,JSON.stringify(replicationView.listState(await catalog.read(owner),url.searchParams)),'application/json');
+    }
+    if(path==='/publicacoes/replicar'&&req.method==='POST'){
+     const id=form.get('requestId');if(!/^[A-Za-z0-9_-]{43}$/.test(id||''))throw new UserError('Solicitação inválida. Reabra a lista.');
+     const row=await replication.begin(owner,form.get('item'),Number(form.get('count')),id);return redirect('/publicacoes/lote/'+row.id);
+    }
+    const batchMatch=path.match(/^[/]publicacoes[/]lote[/]([A-Za-z0-9_-]{43})(?:[/](publicar|avancar|dados))?$/);
+    if(batchMatch){const id=batchMatch[1],action=batchMatch[2];let row=await replication.read(id,owner);
+     if(!action&&req.method==='GET')return send(200,row.status==='editing'?replicationView.edit(row,session):replicationView.result(row,session));
+     if(action==='publicar'&&req.method==='POST'){
+      const copies=row.data.copies.map((c,i)=>({title:String(form.get('title'+i)||''),type:String(form.get('type'+i)||'')}));
+      const result=await replication.submit(id,owner,copies,form.get('finalState'));
+      if(Object.keys(result.errors).length)return send(400,replicationView.edit(result.row,session,result.errors));
+      return redirect('/publicacoes/lote/'+id);
+     }
+     if(action==='avancar'&&req.method==='POST')row=await replication.advance(id,owner);
+     else if(!(action==='dados'&&req.method==='GET'))throw new UserError('Método não permitido.',405);
+     return send(200,JSON.stringify(replicationView.batchState(row)),'application/json');
+    }
+    if(path==='/publicacoes/historico'&&req.method==='GET')return send(200,publicationView.list(await publications.list(owner),session));
     if(path==='/publicacoes/preparar'&&req.method==='POST'){
      const id=form.get('draftId')||'',revision=Number(form.get('revision'));
      if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!Number.isSafeInteger(revision)||revision<1)throw new UserError('Rascunho inválido.');
@@ -231,8 +259,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const metrics=meli?createMetrics({db:store.metrics,meli}):null;
   const dashboard=meli?createOverview({db:store.dashboard,meli,kind:'dashboard'}):null;
   const catalog=meli?createOverview({db:store.catalog,meli,kind:'catalog'}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.8.1 iniciado.'));
+  const replication=meli?createReplication({db:store.replication,meli}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.9.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

@@ -1,6 +1,6 @@
 {
   "name": "gestor-anuncios",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,8 +8,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check meli.mjs && node --check store.mjs && node --check security.mjs && node --check views.mjs && node --check drafts.mjs && node --check draft-views.mjs && node --check test-store.mjs && node --check test-lab.mjs && node --check test-views.mjs && node --check publications.mjs && node --check publication-store.mjs && node --check publication-views.mjs && node --check metrics.mjs && node --check metrics-store.mjs && node --check metrics-views.mjs && node --check metrics-client.js && node --check overview.mjs && node --check overview-views.mjs && node --check overview-client.js",
-    "test": "node --test server.test.mjs meli.test.mjs drafts.test.mjs test-lab.test.mjs publications.test.mjs metrics.test.mjs overview.test.mjs"
+    "check": "node --check server.mjs && node --check meli.mjs && node --check store.mjs && node --check security.mjs && node --check views.mjs && node --check drafts.mjs && node --check draft-views.mjs && node --check test-store.mjs && node --check test-lab.mjs && node --check test-views.mjs && node --check publications.mjs && node --check publication-store.mjs && node --check publication-views.mjs && node --check metrics.mjs && node --check metrics-store.mjs && node --check metrics-views.mjs && node --check metrics-client.js && node --check overview.mjs && node --check overview-views.mjs && node --check overview-client.js && node --check replication.mjs && node --check replication-store.mjs && node --check replication-views.mjs && node --check replication-client.js",
+    "test": "node --test server.test.mjs meli.test.mjs drafts.test.mjs test-lab.test.mjs publications.test.mjs metrics.test.mjs overview.test.mjs replication.test.mjs"
   },
   "dependencies": {
     "pg": "^8.16.3"

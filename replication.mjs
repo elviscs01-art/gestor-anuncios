@@ -1,0 +1,61 @@
+import {UserError,random} from './security.mjs';
+export const normalizeTitle=s=>String(s||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('pt-BR');
+const value=a=>{const r={id:a.id};for(const k of ['value_id','value_name','value_struct','values'])if(a[k]!=null)r[k]=structuredClone(a[k]);return r;};
+export function compatibilityPlan(data){
+ if(!data||(!Array.isArray(data.products)&&!data.universal))throw new UserError('Não foi possível confirmar as compatibilidades do anúncio-base.',409);
+ if(data.universal||Number(data.catalog_compatibilities_count)>0||(data.products||[]).some(p=>p.source==='CATALOGO'||!p.catalog_product_id))throw new UserError('Este anúncio tem compatibilidades universais ou de catálogo que não podem ser copiadas integralmente pela API. A replicação foi bloqueada para não perder os veículos compatíveis.',409);
+ return (data.products||[]).map(p=>{if(!/^MLB[0-9]+$/.test(p.catalog_product_id)||!p.domain_id)throw new UserError('Compatibilidade incompleta no anúncio-base.',409);return {id:p.catalog_product_id,domain:p.domain_id,...typeof p.note==='string'?{note:p.note}:{},...Array.isArray(p.restrictions)?{restrictions:structuredClone(p.restrictions)}:{}};});
+}
+export function replicationSource({item,profile,category,schema,description,compatibility}){
+ if(String(item.seller_id)!==String(profile.id))throw new UserError('O anúncio pertence a outra conta.',403);
+ if(item.catalog_listing)throw new UserError('Este anúncio é de catálogo e não permite replicação com títulos independentes neste fluxo.',409);
+ if(item.variations?.length)throw new UserError('Este anúncio possui variações. A replicação em lote desta versão aceita anúncios sem variações, para preservar os dados sem alterações.',409);
+ if(!Number.isSafeInteger(item.available_quantity)||item.available_quantity<1)throw new UserError('O anúncio-base precisa ter quantidade disponível maior que zero para replicar sem alterar o estoque informado.',409);
+ if(!category||category.id!==item.category_id||!Array.isArray(schema)||typeof description?.plain_text!=='string')throw new UserError('Dados do anúncio-base incompletos. Nenhuma cópia foi criada.',502);
+ const readonly=new Set(schema.filter(a=>a.tags?.read_only||a.tags?.inferred).map(a=>a.id));
+ const payload={category_id:item.category_id,currency_id:item.currency_id,price:item.price,available_quantity:item.available_quantity,buying_mode:item.buying_mode||'buy_it_now',condition:item.condition,listing_type_id:item.listing_type_id,pictures:(item.pictures||[]).map(p=>({id:p.id})),attributes:(item.attributes||[]).filter(a=>!readonly.has(a.id)).map(value)};
+ if(!payload.pictures.length||payload.currency_id!=='BRL'||!(payload.price>0))throw new UserError('Preço, moeda ou fotos indisponíveis no anúncio-base.',409);
+ if(item.seller_custom_field!=null)payload.seller_custom_field=item.seller_custom_field;
+ if(item.official_store_id!=null)payload.official_store_id=item.official_store_id;
+ if(item.sale_terms?.length)payload.sale_terms=item.sale_terms.map(value);
+ if(item.shipping){payload.shipping={};for(const k of ['mode','free_shipping','local_pick_up','dimensions','free_methods','methods'])if(item.shipping[k]!=null)payload.shipping[k]=structuredClone(item.shipping[k]);}
+ const mode=profile.tags?.includes('user_product_seller')?'family_name':'title';
+ return {kind:'official',sellerId:String(profile.id),sellerName:String(profile.nickname||profile.id),sourceId:item.id,sourceTitle:String(item.title||item.family_name||''),sourceFamily:item.family_name||'',mode,maxTitle:category.settings?.max_title_length||60,payload,description:description.plain_text,compatibilities:compatibilityPlan(compatibility),capturedAt:new Date().toISOString()};
+}
+export function validateCopies(source,copies){
+ const errors={};if(!Array.isArray(copies)||copies.length<1||copies.length>20)throw new UserError('Escolha entre 1 e 20 anúncios por lote.');
+ const seen=new Map();copies.forEach((c,i)=>{const title=normalizeTitle(c.title);if(!title||title===normalizeTitle(source.sourceTitle)||title===normalizeTitle(source.sourceFamily))errors[i]='Altere o título: ele ainda está igual ao anúncio-base.';else if(String(c.title).trim().length>source.maxTitle)errors[i]='O título ultrapassa '+source.maxTitle+' caracteres.';else if(seen.has(title)){errors[i]='Use um título diferente dos demais anúncios deste lote.';errors[seen.get(title)]='Use um título diferente dos demais anúncios deste lote.';}else seen.set(title,i);if(!['gold_special','gold_pro'].includes(c.type))errors[i]='Escolha Clássico ou Premium.';});return errors;
+}
+export function copySnapshot(source,copy){const snapshot=structuredClone(source);snapshot.payload[snapshot.mode]=copy.title.trim();snapshot.payload.listing_type_id=copy.type;return snapshot;}
+export function createReplication({db,meli}){
+ const message=e=>e instanceof UserError?e.message:'Não foi possível confirmar a operação. Confira o resultado antes de repetir.';
+ return {
+  list:owner=>db.list(owner),
+  async read(id,owner){const r=await db.read(id,owner);if(!r)throw new UserError('Lote não encontrado.',404);return r;},
+  async begin(owner,item,count,requestId){if(!Number.isInteger(count)||count<1||count>20)throw new UserError('Escolha entre 1 e 20 anúncios por lote.');const old=await db.read(requestId,owner);if(old)return old;const source=await meli.replicationSource(item,owner);return db.create(requestId,owner,{source,copies:Array.from({length:count},()=>({title:source.sourceTitle,type:['gold_special','gold_pro'].includes(source.payload.listing_type_id)?source.payload.listing_type_id:'gold_special',status:'pending'})),finalState:'active'});},
+  async submit(id,owner,copies,finalState){const row=await this.read(id,owner);if(row.status!=='editing')return {row,errors:{}};if(copies.length!==row.data.copies.length)throw new UserError('A quantidade de cópias mudou. Reabra o lote.');const errors=validateCopies(row.data.source,copies);if(!['active','paused'].includes(finalState))throw new UserError('Escolha o estado final dos anúncios.');if(Object.keys(errors).length)return {row:{...row,data:{...row.data,copies,finalState}},errors};await db.submit(id,owner,{...row.data,finalState,copies:copies.map(c=>({title:c.title.trim(),type:c.type,status:'pending'})),stage:'validate',index:0});return {row:await this.read(id,owner),errors:{}};},
+  async advance(id,owner){const job=await db.claim(id,owner);if(!job)return this.read(id,owner);const d=job.data;let status='queued';try{
+   const index=d.index,c=d.copies[index],snapshot=copySnapshot(d.source,c);
+   if(d.stage==='validate'){
+    const checked=await meli.validateReplication(snapshot,owner);c.warnings=checked.warnings||[];
+    if(!checked.ok){c.status='rejected';c.message=checked.message;status='blocked';}
+    else{c.status='validated';d.index++;if(d.index===d.copies.length){d.stage='publish';d.index=0;}}
+   }else{
+    c.status='sending';await db.checkpoint(id,owner,job.token,d);
+    let created;try{created=await meli.createOfficialListing(snapshot,owner);}catch(e){c.status=e instanceof UserError&&!e.uncertain?'rejected':'unknown';c.message=message(e);if(c.status==='unknown')status='blocked';}
+    if(created){c.itemId=created.id;c.itemStatus=created.status;c.status='created';await db.checkpoint(id,owner,job.token,d);
+     try{
+      c.itemStatus='não confirmado';await db.checkpoint(id,owner,job.token,d);c.itemStatus=await meli.pauseOfficialListing(created.id,owner);await db.checkpoint(id,owner,job.token,d);
+      if(c.itemStatus!=='paused')throw new UserError('A pausa para completar os dados não foi confirmada.',409);
+      await meli.describeOfficialListing(created.id,owner,snapshot.description);c.description='saved';await db.checkpoint(id,owner,job.token,d);
+      await meli.applyReplicationCompatibilities(created.id,owner,snapshot.compatibilities);c.compatibilities='saved';await db.checkpoint(id,owner,job.token,d);
+      await meli.verifyReplication(created.id,owner,snapshot);c.verified=true;await db.checkpoint(id,owner,job.token,d);
+      if(d.finalState==='active'){c.itemStatus='não confirmado';await db.checkpoint(id,owner,job.token,d);c.itemStatus=await meli.activateReplication(created.id,owner);}
+      c.status='completed';c.message=d.finalState==='active'?'Anúncio publicado.':'Anúncio criado e pausado.';
+     }catch(e){c.status='partial';c.message=message(e);}
+    }
+    if(status!=='blocked'){d.index++;if(d.index===d.copies.length)status='complete';}
+   }
+  }catch(e){status='blocked';d.error=message(e);}await db.finish(id,owner,job.token,d,status);return this.read(id,owner);}
+ };
+}

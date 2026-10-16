@@ -1,3 +1,26 @@
+# Atualização 0.9.0 — Replicação de anúncios
+
+Envie todos os arquivos extraídos para a raiz do mesmo repositório, substituindo os de mesmo nome. Mantenha as variáveis do Render e o banco atual. O log deve mostrar Gestor 0.9.0 iniciado. As tabelas do novo fluxo são criadas automaticamente.
+
+Fluxo: Replicação de anúncios → procurar por SKU ou ID → selecionar anúncio → confirmar → informar quantidade (1 a 20) → alterar os títulos e escolher Clássico ou Premium → Publicar. O caminho novo não usa rascunhos. Os rascunhos anteriores continuam acessíveis em Configurações e as publicações anteriores pelo histórico.
+
+- Títulos são preenchidos com o anúncio-base e precisam mudar. Comparações ignoram maiúsculas/minúsculas, espaços repetidos e diferenças Unicode equivalentes. Títulos repetidos entre cópias também são bloqueados. O formulário preserva os textos digitados se houver erro.
+- Todos os anúncios do lote são validados antes da primeira criação. Avisos do validador são exibidos; erros interrompem o lote sem publicar. Validação não garante aprovação final do Mercado Livre.
+- As cópias são criadas na conta oficial, pausadas para completar descrição e compatibilidades e conferir os dados, e ativadas após sucesso. Pode existir exposição entre criação e pausa. Se a conferência falhar, o resultado informa a pendência. Se a ativação tiver resultado incerto, o status é indicado como não confirmado.
+- Preço, quantidade, fotos, SKU, atributos editáveis, condições e descrição são importados do anúncio-base sem formulário intermediário. A quantidade é a mesma em CADA cópia; esta versão não divide nem sincroniza estoque físico entre anúncios.
+- Compatibilidades próprias do vendedor são enviadas com notas e restrições e conferidas no destino. Compatibilidades CATALOGO, universais ou sem identificadores não são copiáveis integralmente pela API atual; nesses casos o fluxo bloqueia antes de criar. Anúncios de catálogo, com variações, sem quantidade disponível ou com mais de 200 compatibilidades também são explicitamente bloqueados nesta versão.
+- User Products: o texto é enviado como family_name; o Mercado Livre gera o título final. A tela explica isso. Identidades de anúncio, user product, IDs de variações e contadores não são copiados.
+- Cada lote é persistido, com exclusão mútua e registro antes de criar. Cliques repetidos e reabertura não repetem uma criação. Timeout ou resposta incerta interrompem o lote; confirme os anúncios da conta antes de tentar outro lote. Uma operação interrompida durante envio não é retomada automaticamente, para evitar duplicatas. O histórico permite acompanhar o resultado de cada cópia.
+- As telas não prometem evitar moderação nem permitem duplicação idêntica de títulos. A aprovação e as condições finais continuam sujeitas às regras da plataforma.
+
+Validação local: testes de dados preservados, título, lote, concorrência, autorização, erros incertos, compatibilidades e navegador simulado. Não foram feitas publicações reais durante o desenvolvimento.
+
+Referências:
+https://developers.mercadolivre.com.br/pt_br/compatibilidades-itens-e-produtos-de-autopecas
+https://developers.mercadolivre.com.br/pt_br/user-products
+
+---
+
 # Correção 0.8.1 — Consulta inicial
 
 A busca geral de pedidos agora omite a lista composta de status. Cancelados são consultados separadamente, com paginação e deduplicação por pedido. Erros da API informam HTTP, etapa e código técnico quando disponível, sem mostrar tokens ou dados de compradores. A causa na conta real ainda depende de verificação após o deploy. Atualize os arquivos de mesmo nome e clique em Atualizar resumo. Não é necessário alterar as permissões antecipadamente.
