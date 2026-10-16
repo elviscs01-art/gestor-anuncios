@@ -1,4 +1,71 @@
-# Gestor de anúncios — versão 0.5.0
+# Gestor de anúncios — versão 0.6.0
+
+## Novidade: métricas dos anúncios
+
+Esta versão adiciona um painel de consulta à conta oficial, com:
+- Anúncios sem visitas desde a criação, quando o histórico cobre toda a idade do anúncio.
+- Anúncios com zero visitas no histórico disponível, separados quando não é possível afirmar “nunca”.
+- Anúncios com contador de unidades vendidas igual a zero, ordenados por criação.
+- Anúncios que já venderam e estão sem venda paga há pelo menos 30, 60 ou 90 dias, ou há mais de 120 dias.
+- Filtros por status, título/código e criação do mais antigo ou mais recente.
+- Última venda paga encontrada, visitas, unidades vendidas e dias sem vender.
+- Indicação de falhas de consulta e de dados parciais.
+
+Os períodos de inatividade são cumulativos. Um anúncio sem venda há 100 dias aparece nos grupos de 30, 60 e 90 dias. “Mais de 120 dias” exclui exatamente 120 dias.
+
+## Atualizar e usar
+
+1. Extraia gestor-anuncios-v0.6.0.zip.
+2. Envie todos os arquivos extraídos para a raiz do GitHub, substituindo os anteriores. Não envie o ZIP nem a pasta que o envolve.
+3. Confirme Commit changes e aguarde o Render. O início deve mostrar Gestor 0.6.0.
+4. Mantenha o banco, variáveis e comandos atuais. A tabela metrics_jobs é criada automaticamente.
+5. Abra Métricas dos anúncios > Carregar métricas.
+6. Mantenha a página aberta durante a coleta. O aplicativo busca os códigos e consulta os anúncios em pequenos lotes.
+7. Aguarde Coleta concluída, depois escolha grupo, período, status e ordem de criação.
+
+A primeira coleta pode levar alguns minutos ou mais, dependendo do tamanho da conta e da API. Se fechar a página, abra Métricas e clique em Continuar atualização. Há botão para pausar e retomar. O progresso é salvo no banco; duas abas não executam o mesmo lote ao mesmo tempo.
+
+Durante a primeira coleta, os resultados são parciais. Nas atualizações seguintes, a última coleta concluída permanece disponível até a nova terminar. A atualização não é agendada: ela ocorre enquanto você mantém o fluxo de coleta aberto. Dados não se atualizam sozinhos quando a página está fechada.
+
+Se houver interrupção na listagem, o aplicativo mostra a falha. A listagem do Mercado Livre usa um cursor com expiração; uma pausa longa nessa fase pode exigir uma nova coleta. Cancele uma coleta pausada para iniciar outra, se necessário.
+
+## Significado e limites das métricas
+
+Visitas: o endpoint de total retorna os últimos dois anos. O grupo Nunca tiveram visitas exige total zero, data de criação dentro desse intervalo e ausência de parent_item_id. Anúncios mais antigos/republicados ficam em Zero visitas no histórico disponível. Isso não reconstrói dados anteriores aos fornecidos pela API.
+
+Sem vendas registradas: sold_quantity igual a zero e nenhuma venda paga encontrada em contradição. O contador é de unidades, não de pedidos nem de faturamento líquido.
+
+Pararam de vender: exige sold_quantity maior que zero e consulta de pedidos bem-sucedida. Busca o pedido mais recente atualmente paid, pelo código exato do anúncio e vendedor, ordenado por date_desc. Para vendedores, a ordenação e o painel usam date_closed, a data de confirmação do pedido.
+
+A busca cobre 180 dias para atender os filtros solicitados. A API mantém pedidos por até 12 meses. Se o anúncio tem vendas históricas, mas nenhum pedido pago nesse intervalo, mostramos Pelo menos N dias, sem inventar a última data de venda. O limite leva em conta a idade do anúncio. Pedidos cancelados ou pendentes não entram nessa busca; não é uma análise financeira de devoluções e reembolsos.
+
+Falhas de permissão, respostas incompletas e recursos indisponíveis não viram zero. Confira o grupo Dados incompletos e abra Dados indisponíveis na linha do anúncio. Métricas/visitas e pedidos precisam das permissões de leitura correspondentes. Se necessário, ajuste as permissões na aplicação Mercado Livre e reconecte a conta oficial; não é necessário fazer isso se as consultas já funcionarem.
+
+A análise é por código MLB. Vários anúncios do mesmo produto não são agrupados por SKU ou aplicação. Todos os status são coletados conforme a listagem privada retorna; filtre Ativos se desejar focar anúncios disponíveis para venda. A lista começa pelos mais antigos, com 50 linhas por página.
+
+Os dados são consultados ao longo da coleta, e podem mudar na plataforma entre chamadas. A data/hora da coleta é exibida. Contadores resumem a base carregada antes dos filtros. A aplicação guarda a coleta atual e a última concluída, não um histórico diário completo.
+
+## Privacidade e funcionamento
+
+Esta área não altera anúncios. As chamadas de negócio ao Mercado Livre são GET; a autorização pode renovar o token pelo fluxo já existente. São salvos apenas os campos necessários do anúncio e a data da última venda encontrada, sem nomes, e-mails ou endereços de compradores e sem armazenar pedidos completos.
+
+Formulários de atualização exigem sessão, origem válida e CSRF. O vendedor é obtido da conexão autenticada, nunca do formulário. Um registro persistente com prazo de execução coordena os lotes e impede que uma etapa antiga sobrescreva uma coleta pausada. A listagem usa scan para não limitar a conta aos primeiros 1.000 anúncios.
+
+## Verificação
+
+73 testes automatizados com serviços simulados passaram, incluindo limites dos períodos, histórico incompleto, falhas de permissão, propriedade do vendedor, paginação, duplicação, retomada e proteção dos formulários. Os módulos passaram na verificação de sintaxe. As telas foram preparadas para desktop e celular.
+
+A nova tabela PostgreSQL e as permissões/retornos reais precisam ser conferidos no Render. Nenhuma consulta real às métricas da conta foi feita durante o desenvolvimento local. A criação de anúncios da versão anterior continua disponível.
+
+## Fontes
+
+- https://developers.mercadolivre.com.br/pt_br/como-comecar/recurso-visits
+- https://developers.mercadolivre.com.br/pt_br/imovel-consulta-de-usuarios/gerenciamento-de-vendas
+- https://developers.mercadolivre.com.br/pt_br/itens-e-buscas
+
+---
+
+# Referência: publicação na conta oficial (0.5.0)
 
 ## Atualização
 

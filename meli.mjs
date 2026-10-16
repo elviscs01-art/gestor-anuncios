@@ -96,6 +96,42 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  }
  return {
   redirectUri,
+  async metricsProfile(owner){return (await officialAccess(owner)).profile;},
+  async metricsScan(owner,cursor){
+   if(!/^[0-9]+$/.test(String(owner)))throw new UserError('Vendedor inválido.');
+   const q=new URLSearchParams({search_type:'scan',limit:'100'});
+   if(cursor)q.set('scroll_id',cursor);
+   const data=await get('/users/'+owner+'/items/search?'+q);
+   if(data===null)return {ids:[],total:null,cursor:null,done:true};
+   const ids=data.results===null?[]:data.results;
+   if(!Array.isArray(ids)||ids.some(id=>!/^MLB[0-9]+$/.test(id)))throw new UserError('A listagem de anúncios retornou dados inesperados.',502);
+   const total=Number.isSafeInteger(data.paging?.total)?data.paging.total:null;
+   if(ids.length&&!data.scroll_id)throw new UserError('A listagem não retornou a continuação necessária. Não será apresentada como completa.',502);
+   return {ids,total,cursor:data.scroll_id||null,done:ids.length===0};
+  },
+  async metricsItem(id,owner){
+   if(!/^MLB[0-9]+$/.test(id))throw new UserError('Anúncio inválido.');
+   const item=await get('/items/'+id);
+   if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio fora da conta conectada.',403);
+   const at=now(),from=new Date(at-180*86400000).toISOString();
+   const row={id,title:String(item.title||item.family_name||id),status:String(item.status||'não informado'),created:item.date_created||null,parent:item.parent_item_id||null,sold:Number.isSafeInteger(item.sold_quantity)&&item.sold_quantity>=0?item.sold_quantity:null,price:typeof item.price==='number'?item.price:null,checkedAt:new Date(at).toISOString()};
+   const q=new URLSearchParams({seller:String(owner),item:id,'order.status':'paid',sort:'date_desc',limit:'1','order.date_closed.from':from});
+   const [visits,sales]=await Promise.allSettled([get('/visits/items?'+new URLSearchParams({ids:id})),get('/orders/search?'+q)]);
+   if(visits.status==='fulfilled'&&Number.isSafeInteger(visits.value?.[id])&&visits.value[id]>=0)row.visits={total:visits.value[id]};
+   else row.visits={error:visits.status==='rejected'&&visits.reason instanceof UserError?visits.reason.message:'Total de visitas não retornado.'};
+   if(sales.status==='fulfilled'){
+    const data=sales.value,orders=data.results,total=data.paging?.total;
+    if(!Array.isArray(orders)||!Number.isSafeInteger(total)||total<0||!orders.length&&total!==0)row.sales={ok:false,error:'Resposta de pedidos incompleta.'};
+    else if(!orders.length)row.sales={ok:true,lastPaid:null,from};
+    else {
+     const order=orders[0],date=Date.parse(order.date_closed);
+     if(order.status!=='paid'||String(order.seller?.id)!==String(owner)||!order.order_items?.some(line=>line.item?.id===id)||!Number.isFinite(date)||date<Date.parse(from)||data.sort?.id!=='date_desc')row.sales={ok:false,error:'Não foi possível confirmar a última venda deste anúncio.'};
+     else row.sales={ok:true,lastPaid:new Date(date).toISOString(),from};
+    }
+   }else row.sales={ok:false,error:sales.reason instanceof UserError?sales.reason.message:'Consulta de pedidos indisponível.'};
+   return row;
+  },
+
   async prepareOfficial(draft,expected){
    const {profile}=await officialAccess(expected);
    if(draft.sellerId!==String(expected))throw new UserError('O rascunho pertence a outra conta.',403);

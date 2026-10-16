@@ -1,3 +1,5 @@
+import {createMetrics} from './metrics.mjs';
+import * as metricsView from './metrics-views.mjs';
 import {createPublications} from './publications.mjs';
 import * as publicationView from './publication-views.mjs';
 import {createLab} from './test-lab.mjs';
@@ -19,7 +21,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -27,7 +29,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
  const handler=async(req,res)=>{
   const nonce=random();
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin');
-  res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
@@ -36,6 +38,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
+   if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsView.autoScript,'text/javascript; charset=utf-8');
    if(!['GET','POST'].includes(req.method))return send(405,'Método não permitido.');
    if(req.method==='POST'&&req.headers.origin!==settings.baseUrl)throw new UserError('Solicitação de outra origem bloqueada.',403);
    const rawCookie=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';
@@ -74,6 +77,21 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     try{await service.complete({sessionId,state:url.searchParams.get('state'),code:url.searchParams.get('code'),denied:url.searchParams.has('error')});}
     catch(error){console.error('oauth_failed:'+(error instanceof UserError?error.status:'internal'));return redirect(back+'?notice='+(isTest?'auth_failed':'oauth_failed'));}
     return redirect(back+'?notice=connected');
+   }
+   if(path==='/metricas'||path.startsWith('/metricas/')){
+    if(missing.length||!metrics)throw new UserError('Configure a conexão principal primeiro.',409);
+    const connection=await store.summary();if(!connection?.user_id)throw new UserError('Conecte a conta oficial.',409);
+    const owner=String(connection.user_id);
+    if(path==='/metricas'&&req.method==='GET')return send(200,metricsView.dashboard(await metrics.read(owner),session,url.searchParams));
+    if(req.method==='POST'){
+     if(path==='/metricas/iniciar')await metrics.start(owner);
+     else if(path==='/metricas/avancar')await metrics.advance(owner);
+     else if(path==='/metricas/pausar'){await metrics.pause(owner);return redirect('/metricas');}
+     else if(path==='/metricas/retomar')await metrics.resume(owner);
+     else if(path==='/metricas/descartar'){await store.metrics.discard(owner);return redirect('/metricas');}
+     else return send(404,view.errorPage('Página não encontrada.',session));
+     return redirect('/metricas?auto=1');
+    }
    }
    if(path==='/publicacoes'||path.startsWith('/publicacoes/')){
     if(missing.length||!publications)throw new UserError('Configure a conexão principal primeiro.',409);
@@ -178,8 +196,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const testMeli=meli?createMeli({...settings,store:store.testing,crypto,expectedSeller:'',requireTestUser:true}):null;
   const lab=meli?createLab({store,live:meli,test:testMeli,crypto}):null;
   const publications=meli?createPublications({store,meli}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab,publications});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.5.0 iniciado.'));
+  const metrics=meli?createMetrics({db:store.metrics,meli}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.6.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

@@ -106,3 +106,16 @@ test('official publication requires its own confirmation, authenticated CSRF and
  assert.equal((await h.request('/publicacoes/publicar',{headers:{cookie}})).status,404);assert.equal(calls,0);
  assert.equal((await h.post('/publicacoes/publicar',body,{cookie})).status,303);assert.equal(calls,1);
 });
+
+test('metrics routes protect owner and require POST, origin and csrf to sync',async()=>{
+ let writes=0,reads=0;const store=new SetupSessions();store.summary=async()=>({user_id:'123'});
+ const metrics={read:async owner=>{assert.equal(owner,'123');reads++;return null;},start:async owner=>{assert.equal(owner,'123');writes++;},advance:async()=>{writes++;}};
+ const h=harness({store,settings:{...settings,databaseUrl:'yes',key:'yes',clientId:'1',clientSecret:'yes'},metrics});
+ assert.equal((await h.request('/metricas')).headers.location,'/login');
+ const {cookie,session}=await h.login();
+ assert.equal((await h.request('/metricas',{headers:{cookie}})).status,200);assert.equal(reads,1);assert.equal(writes,0);
+ assert.equal((await h.request('/metricas/iniciar',{headers:{cookie}})).status,404);
+ assert.equal((await h.post('/metricas/iniciar',{}, {cookie})).status,403);
+ assert.equal((await h.post('/metricas/iniciar',{csrf:session.csrf},{cookie,origin:'https://other.example'})).status,403);assert.equal(writes,0);
+ assert.equal((await h.post('/metricas/iniciar',{csrf:session.csrf,seller:'999'}, {cookie})).headers.location,'/metricas?auto=1');assert.equal(writes,1);
+});
