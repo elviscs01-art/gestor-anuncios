@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs';
+const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
 import {createMetrics} from './metrics.mjs';
 import * as metricsView from './metrics-views.mjs';
 import {createPublications} from './publications.mjs';
@@ -29,16 +31,17 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
  const handler=async(req,res)=>{
   const nonce=random();
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin');
-  res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&req.url.startsWith('/metricas');
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
-   if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsView.autoScript,'text/javascript; charset=utf-8');
+   if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsScript,'text/javascript; charset=utf-8');
    if(!['GET','POST'].includes(req.method))return send(405,'Método não permitido.');
    if(req.method==='POST'&&req.headers.origin!==settings.baseUrl)throw new UserError('Solicitação de outra origem bloqueada.',403);
    const rawCookie=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';
@@ -59,7 +62,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     const token=random();await store.putSession(hash(token),{csrf:random(),stamp,expires:now()+8*3600000});
     res.setHeader('Set-Cookie',cookie(token,8*3600));return redirect('/');
    }
-   if(!session)return redirect('/login');
+   if(!session){if(jsonMetrics)return send(401,JSON.stringify({error:'Sessão expirada. Entre novamente no aplicativo.'}),'application/json');return redirect('/login');}
    if(req.method==='POST'&&!equal(form.get('csrf')||'',session.csrf))throw new UserError('Formulário expirado. Recarregue a página e tente novamente.',403);
    if(path==='/logout'&&req.method==='POST'){await store.deleteSession(sessionId);res.setHeader('Set-Cookie',cookie('',0));return redirect('/login');}
    if(path==='/'&&req.method==='GET'){
@@ -82,14 +85,17 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     if(missing.length||!metrics)throw new UserError('Configure a conexão principal primeiro.',409);
     const connection=await store.summary();if(!connection?.user_id)throw new UserError('Conecte a conta oficial.',409);
     const owner=String(connection.user_id);
+    const jsonState=async()=>send(200,JSON.stringify(metricsView.state(await metrics.read(owner),session,url.searchParams)),'application/json; charset=utf-8');
     if(path==='/metricas'&&req.method==='GET')return send(200,metricsView.dashboard(await metrics.read(owner),session,url.searchParams));
+    if(path==='/metricas/dados'&&req.method==='GET')return jsonState();
     if(req.method==='POST'){
      if(path==='/metricas/iniciar')await metrics.start(owner);
      else if(path==='/metricas/avancar')await metrics.advance(owner);
-     else if(path==='/metricas/pausar'){await metrics.pause(owner);return redirect('/metricas');}
+     else if(path==='/metricas/pausar')await metrics.pause(owner);
      else if(path==='/metricas/retomar')await metrics.resume(owner);
-     else if(path==='/metricas/descartar'){await store.metrics.discard(owner);return redirect('/metricas');}
-     else return send(404,view.errorPage('Página não encontrada.',session));
+     else if(path==='/metricas/descartar')await store.metrics.discard(owner);
+     else throw new UserError('Página não encontrada.',404);
+     if(jsonMetrics)return jsonState();
      return redirect('/metricas?auto=1');
     }
    }
@@ -181,6 +187,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   }catch(error){
    const known=error instanceof UserError;
    if(!known)console.error('request_failed:'+nonce); // No URLs, tokens, password, request bodies or database error text.
+   if(!res.headersSent&&jsonMetrics)return send(known?error.status:503,JSON.stringify({error:known?error.message:'Serviço temporariamente indisponível. Tente retomar o diagnóstico.'}),'application/json');
    if(!res.headersSent)send(known?error.status:503,view.errorPage(known?error.message:'Serviço temporariamente indisponível. Confira a disponibilidade do banco e tente novamente.',session));else res.end();
   }
  };
@@ -198,7 +205,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const publications=meli?createPublications({store,meli}):null;
   const metrics=meli?createMetrics({db:store.metrics,meli}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.6.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.7.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

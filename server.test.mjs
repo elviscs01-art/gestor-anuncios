@@ -119,3 +119,18 @@ test('metrics routes protect owner and require POST, origin and csrf to sync',as
  assert.equal((await h.post('/metricas/iniciar',{csrf:session.csrf},{cookie,origin:'https://other.example'})).status,403);assert.equal(writes,0);
  assert.equal((await h.post('/metricas/iniciar',{csrf:session.csrf,seller:'999'}, {cookie})).headers.location,'/metricas?auto=1');assert.equal(writes,1);
 });
+
+test('diagnostic JSON endpoints update without redirects and preserve auth/CSRF protections',async()=>{
+ let updates=0;const store=new SetupSessions();store.summary=async()=>({user_id:'123'});
+ const h=harness({store,settings:{...settings,databaseUrl:'yes',key:'yes',clientId:'1',clientSecret:'yes'},metrics:{read:async()=>null,start:async()=>{updates++;},advance:async()=>{updates++;}}});
+ assert.equal((await h.request('/metricas/dados',{headers:{accept:'application/json'}})).status,401);
+ const {cookie,session}=await h.login();
+ const headers={cookie,accept:'application/json'};
+ const result=await h.post('/metricas/iniciar',{csrf:session.csrf},headers);
+ assert.equal(result.status,200);assert.equal(result.headers.location,undefined);assert.equal(updates,1);
+ assert.equal(JSON.parse(result.body).status,'empty');assert.match(JSON.parse(result.body).progressHtml,/Carregar diagnóstico/);
+ const csrfFailure=await h.post('/metricas/avancar',{},headers);assert.equal(csrfFailure.status,403);assert.ok(JSON.parse(csrfFailure.body).error);assert.equal(updates,1);
+ const data=await h.request('/metricas/dados?visits=30&sales=60',{headers});
+ assert.equal(data.status,200);assert.ok(JSON.parse(data.body).resultsHtml);assert.equal(updates,1);
+ const html=await h.request('/metricas',{headers:{cookie}});assert.match(html.headers['content-security-policy'],/connect-src 'self'/);
+});

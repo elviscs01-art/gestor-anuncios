@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classify,selectMetrics,createMetrics,DAY} from './metrics.mjs';
+import {classify,selectMetrics,selectDiagnostics,createMetrics,DAY} from './metrics.mjs';
 import {createMeli} from './meli.mjs';
 import {vault,UserError} from './security.mjs';
 import {dashboard} from './metrics-views.mjs';
@@ -53,6 +53,7 @@ function apiFixture(overrides={}){
   calls.push({url,...o});assert.equal(o.method,'GET');
   if(url.includes('/users/me'))return Response.json({id:123,site_id:'MLB',tags:[]});
   if(url.includes('/items/search'))return Response.json(overrides.scan===undefined?{results:[base.id],paging:{total:1},scroll_id:'cursor'}:overrides.scan);
+  if(url.includes('/items/visits?')){const q=new URL(url).searchParams;return overrides.periodsResponse||Response.json({item_id:base.id,date_from:q.get('date_from'),date_to:q.get('date_to'),total_visits:overrides.periodTotal??7});}
   if(url.includes('/visits/items'))return overrides.visitsResponse||Response.json(overrides.visits===undefined?{[base.id]:0}:overrides.visits);
   if(url.includes('/orders/search'))return overrides.ordersResponse||Response.json(overrides.orders||{results:[order],paging:{total:1},sort:{id:'date_desc'}});
   return Response.json(overrides.item||{id:base.id,seller_id:123,title:'Evaporador',status:'active',date_created:iso(200),sold_quantity:10,parent_item_id:null});
@@ -131,4 +132,47 @@ test('dashboard explains partial history and escapes untrusted titles',()=>{
  const html=dashboard(job,{csrf:'csrf'},new URLSearchParams('filter=stopped&days=90'));
  assert.match(html,/Dados parciais/);assert.match(html,/últimos dois anos/);assert.match(html,/180 dias/);
  assert.ok(!html.includes('<script>injection'));assert.match(html,/&lt;script&gt;/);
+});
+
+test('period visit counts use explicit 30/60/90 day windows and preserve lifetime separately',async()=>{
+ const f=apiFixture();const r=await f.service.metricsItem(base.id,'123');
+ assert.equal(r.visits.total,0);
+ for(const days of [30,60,90])assert.deepEqual(r.visitPeriods[days],{total:7,from:iso(days),to:iso(0)});
+ assert.equal(f.calls.filter(c=>c.url.includes('/items/visits?')).length,3);
+});
+test('wrong period coverage, wrong item and invalid counts never become zero visits',async()=>{
+ for(const data of [{item_id:base.id,date_from:iso(10),date_to:iso(0),total_visits:0},{item_id:'MLB999',date_from:iso(30),date_to:iso(0),total_visits:0},{item_id:base.id,date_from:iso(30),date_to:iso(0),total_visits:-1}]){
+  const f=apiFixture({periodsResponse:Response.json(data)});const r=await f.service.metricsItem(base.id,'123');assert.equal(r.visitPeriods[30].total,undefined);
+ }
+});
+test('SKU extraction preserves distinct variation SKUs and supports search',async()=>{
+ const item={id:base.id,seller_id:123,title:'Produto',attributes:[{id:'SELLER_SKU',value_name:'ABC'}],seller_custom_field:'ABC',variations:[{seller_custom_field:'VAR1'},{attributes:[{id:'SELLER_SKU',value_name:'VAR2'}]}]};
+ const r=await apiFixture({item}).service.metricsItem(base.id,'123');assert.deepEqual(r.skus,['ABC','VAR1','VAR2']);assert.equal(selectDiagnostics([r],{q:'var2'}).total,1);
+});
+test('diagnostic period filters intersect and exclude unavailable visits and orders',()=>{
+ const r={...base,visitPeriods:{30:{total:0},60:{total:2},90:{total:5}}};
+ const recent={...r,id:'MLB2',sales:{...r.sales,lastPaid:iso(10)}};
+ assert.equal(selectDiagnostics([r,recent],{visits:'30',sales:'30'}).total,1);
+ assert.equal(selectDiagnostics([r],{visits:'60'}).total,0);
+ assert.equal(selectDiagnostics([{...r,visitPeriods:undefined}],{visits:'30'}).total,0);
+ assert.equal(selectDiagnostics([{...r,sales:{ok:false}}],{sales:'30'}).total,0);
+});
+test('no sales in period includes new unsold listings with successful covered search',()=>{
+ const r={...base,created:iso(10),sold:0,sales:{ok:true,lastPaid:null,from:iso(180)}};
+ assert.equal(selectDiagnostics([r],{sales:'30'}).total,1);
+ assert.equal(selectDiagnostics([r],{sales:'none'}).total,1);
+ assert.equal(selectDiagnostics([{...r,sales:{...r.sales,from:iso(15)}}],{sales:'30'}).total,0);
+ assert.equal(selectDiagnostics([{...base,sales:{...base.sales,lastPaid:iso(30)}}],{sales:'30'}).total,0);
+});
+test('inactive groups known non-active statuses and never unknown data',()=>{
+ const rows=['active','paused','closed','under_review','not_yet_active',undefined].map((status,i)=>({...base,id:'MLB'+i,status}));
+ assert.equal(selectDiagnostics(rows,{status:'inactive'}).total,4);
+ assert.equal(selectDiagnostics(rows,{status:'active'}).total,1);
+});
+test('diagnostic view has five columns, counts, copy buttons and no minimum table width',()=>{
+ const r={...base,skus:['SKU-X'],visitPeriods:{30:{total:7}}};
+ const data={stage:'items',ids:[r.id],offset:1,rows:[r],startedAt:iso(0),finishedAt:iso(0)};
+ const html=dashboard({status:'complete',data,snapshot:data},{csrf:'csrf'});
+ assert.match(html,/Diagnóstico de anúncios/);assert.match(html,/1 anúncio filtrado/);assert.match(html,/data-copy="SKU-X"/);
+ assert.ok(!html.includes('min-width:1000px'));assert.ok(!html.includes('data-metrics-auto'));assert.equal((html.match(/<th>/g)||[]).length,5);
 });

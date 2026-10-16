@@ -1,4 +1,66 @@
-# Gestor de anúncios — versão 0.6.0
+# Gestor de anúncios — versão 0.7.0
+
+## Diagnóstico de anúncios
+
+A página foi reorganizada conforme a estrutura do rascunho fornecido, mantendo o cabeçalho existente:
+- Botão Carregar/Atualizar diagnóstico, indicador giratório e barra de progresso.
+- Coleta por requisições em segundo plano, sem recarregar o documento inteiro.
+- Filtros independentes Sem visitas e Tempo sem vender, que podem ser combinados.
+- Períodos Últimos 30, 60 e 90 dias e opção de ausência no histórico correspondente. A opção Mais de 120 dias sem vendas também continua disponível.
+- Status Ativo/Inativo e ordem de criação.
+- Busca por título, MLB ou SKU.
+- Contagem de anúncios filtrados.
+- Cinco colunas: Anúncio, Status, Vendidos, Última venda e Visitas dos últimos 30 dias.
+- Código MLB e SKUs com botões de copiar. Clique no título para consultar o anúncio.
+- Tabela sem rolagem horizontal no computador; no celular, os mesmos campos são reorganizados por anúncio.
+
+## Atualizar
+
+1. Extraia gestor-anuncios-v0.7.0.zip.
+2. Envie todos os arquivos para a raiz do GitHub, substituindo os anteriores. Inclua o novo metrics-client.js.
+3. Confirme Commit changes e aguarde o Render mostrar Gestor 0.7.0 iniciado.
+4. Abra Diagnóstico de anúncios e clique em Atualizar diagnóstico.
+5. Aguarde concluir para carregar os novos dados de SKU e visitas por período. Bases antigas continuam visíveis, mas não contêm esses campos; ausências nunca são tratadas como zero.
+
+Não é necessário alterar variáveis, banco ou comandos do Render.
+
+## Filtros
+
+Conforme confirmado, Últimos 30/60/90 dias significa zero visitas ou nenhuma venda paga na janela consultada; não significa faixas de 0–30, 31–60 e 61–90 dias desde a última ocorrência.
+
+Os filtros são combinados por E: Sem visitas 30 dias + Tempo sem vender 60 dias mostra apenas anúncios que atendem às duas condições. Use Todos para não restringir um dos campos. Anúncios novos podem aparecer se não tiveram visitas/vendas no período consultado.
+
+Sem visitas no histórico exige total disponível igual a zero e respeita o limite histórico de dois anos da API. Não equivale a uma afirmação de ausência durante toda a vida de anúncios mais antigos. Sem vendas registradas usa o contador de unidades vendidas igual a zero, desde que não haja pedido pago encontrado em contradição.
+
+Inativo agrupa pausados, encerrados, em revisão e demais status retornados diferentes de ativo. Status desconhecido não é considerado inativo. O status original pode ser visto ao passar o mouse no indicador.
+
+A coluna Visitas últimos 30 dias sempre mostra essa janela, mesmo quando o filtro é de 60 ou 90 dias. O total histórico não é usado como substituto. Os dados ausentes aparecem como —, com explicações de falha quando disponíveis.
+
+## Carregamento
+
+A barra fica sem percentual enquanto os códigos são localizados. Após conhecer o total, o percentual reflete anúncios analisados, não uma estimativa de tempo. Os filtros e campos permanecem na tela durante a coleta. Pausar e retomar não navegam para outra página.
+
+O progresso é salvo por etapas. Ao reabrir a página, uma coleta em andamento é retomada automaticamente. A coleta não continua enquanto o aplicativo está fechado. Se a sessão expirar ou uma requisição falhar, a página informa o problema e permite conferir o progresso novamente.
+
+A tela continua exibindo a última base concluída enquanto uma atualização está em andamento. Na primeira coleta, os resultados são marcados como parciais. Uma falha de consulta não é convertida em zero.
+
+As novas consultas de visitas usam intervalos explícitos de 30, 60 e 90 dias. A aplicação verifica o código do anúncio, a contagem e as datas retornadas. Uma resposta incompleta ou de outro intervalo é indicada como indisponível.
+
+## Verificação
+
+81 testes automatizados passaram com serviços simulados. Incluem filtros combinados, períodos, limites, SKUs das variações, dados ausentes, propriedade do vendedor e proteção dos formulários/rotas JSON.
+
+O teste de navegador confirmou uma única navegação do documento durante início, coleta e filtragem, preservação dos filtros durante o carregamento, cópia de SKU e todas as colunas visíveis em larguras de 1280, 1024, 768, 390 e 320 pixels. A interface foi inspecionada em imagens de desktop e celular.
+
+Os novos retornos reais de visitas por intervalo precisam ser conferidos na primeira atualização pelo Render. Nenhuma consulta real à conta foi feita durante os testes locais. Os módulos de publicação permanecem disponíveis.
+
+## Referência da API de visitas
+
+https://developers.mercadolivre.com.br/pt_br/como-comecar/recurso-visits
+
+---
+
+# Referência da versão 0.6.0
 
 ## Novidade: métricas dos anúncios
 

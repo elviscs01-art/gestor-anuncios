@@ -66,3 +66,34 @@ export function createMetrics({db,meli,now=Date.now}){
   }
  };
 }
+
+export function selectDiagnostics(rows,params={}){
+ const visits=['all','30','60','90','none'].includes(String(params.visits))?String(params.visits):'all';
+ const sales=['all','30','60','90','120','none'].includes(String(params.sales))?String(params.sales):'all';
+ const status=['all','active','inactive'].includes(params.status)?params.status:'all';
+ const sort=params.sort==='newest'?'newest':'oldest',q=String(params.q||'').trim().slice(0,120).toLocaleLowerCase('pt-BR');
+ let selected=rows.filter(row=>{
+  if(status==='active'&&row.status!=='active')return false;
+  if(status==='inactive'&&(!row.status||row.status==='active'||row.status==='não informado'))return false;
+  if(q&&![row.id,row.title,...(row.skus||[])].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR').includes(q))return false;
+  if(visits==='none'&&row.visits?.total!==0)return false;
+  if(!['all','none'].includes(visits)&&row.visitPeriods?.[visits]?.total!==0)return false;
+  if(sales==='none'&&!classify(row).noSales)return false;
+  if(!['all','none'].includes(sales)){
+   if(row.sales?.ok!==true)return false;
+   const cutoff=Date.parse(row.checkedAt)-Number(sales)*DAY,last=Date.parse(row.sales.lastPaid),from=Date.parse(row.sales.from);
+   if(!Number.isFinite(cutoff))return false;
+   if(Number.isFinite(last)){if(last>=cutoff)return false;}
+   else if(!Number.isFinite(from)||from>cutoff)return false;
+  }
+  return true;
+ });
+ selected.sort((a,b)=>{
+  const aDate=Date.parse(a.created),bDate=Date.parse(b.created);
+  if(!Number.isFinite(aDate)&&!Number.isFinite(bDate))return a.id.localeCompare(b.id);
+  if(!Number.isFinite(aDate))return 1;if(!Number.isFinite(bDate))return -1;
+  return (sort==='oldest'?aDate-bDate:bDate-aDate)||a.id.localeCompare(b.id);
+ });
+ const total=selected.length,pages=Math.max(1,Math.ceil(total/50)),page=Math.min(pages,Math.max(1,Number.parseInt(params.page,10)||1));
+ return {rows:selected.slice((page-1)*50,page*50),total,pages,page,visits,sales,status,sort,q};
+}

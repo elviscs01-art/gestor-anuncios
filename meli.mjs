@@ -115,6 +115,8 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio fora da conta conectada.',403);
    const at=now(),from=new Date(at-180*86400000).toISOString();
    const row={id,title:String(item.title||item.family_name||id),status:String(item.status||'não informado'),created:item.date_created||null,parent:item.parent_item_id||null,sold:Number.isSafeInteger(item.sold_quantity)&&item.sold_quantity>=0?item.sold_quantity:null,price:typeof item.price==='number'?item.price:null,checkedAt:new Date(at).toISOString()};
+   const skuValues=[item.attributes?.find(a=>a.id==='SELLER_SKU')?.value_name,item.seller_custom_field,...(item.variations||[]).flatMap(v=>[v.attributes?.find(a=>a.id==='SELLER_SKU')?.value_name,v.seller_custom_field])];
+   row.skus=[...new Set(skuValues.filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim().slice(0,200)))];
    const q=new URLSearchParams({seller:String(owner),item:id,'order.status':'paid',sort:'date_desc',limit:'1','order.date_closed.from':from});
    const [visits,sales]=await Promise.allSettled([get('/visits/items?'+new URLSearchParams({ids:id})),get('/orders/search?'+q)]);
    if(visits.status==='fulfilled'&&Number.isSafeInteger(visits.value?.[id])&&visits.value[id]>=0)row.visits={total:visits.value[id]};
@@ -129,6 +131,17 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
      else row.sales={ok:true,lastPaid:new Date(date).toISOString(),from};
     }
    }else row.sales={ok:false,error:sales.reason instanceof UserError?sales.reason.message:'Consulta de pedidos indisponível.'};
+   row.visitPeriods={};
+   // Keep the intervals explicit. Missing or malformed responses never mean zero.
+   for(const days of [30,60,90]){
+    const start=new Date(at-days*86400000).toISOString(),end=new Date(at).toISOString();
+    try{
+     const data=await get('/items/visits?'+new URLSearchParams({ids:id,date_from:start,date_to:end}));
+     const begin=Date.parse(data?.date_from),finish=Date.parse(data?.date_to);
+     if(data?.item_id!==id||!Number.isSafeInteger(data.total_visits)||data.total_visits<0||!Number.isFinite(begin)||!Number.isFinite(finish)||Math.abs(begin-Date.parse(start))>1000||Math.abs(finish-at)>1000)throw new UserError('O período de visitas não foi confirmado pela API.',502);
+     row.visitPeriods[days]={total:data.total_visits,from:data.date_from,to:data.date_to};
+    }catch(e){row.visitPeriods[days]={error:e instanceof UserError?e.message:'Consulta de visitas indisponível.'};}
+   }
    return row;
   },
 
