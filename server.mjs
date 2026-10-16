@@ -1,3 +1,5 @@
+import {createPublications} from './publications.mjs';
+import * as publicationView from './publication-views.mjs';
 import {createLab} from './test-lab.mjs';
 import * as testView from './test-views.mjs';
 import {applyForm} from './drafts.mjs';
@@ -17,7 +19,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -72,6 +74,28 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     try{await service.complete({sessionId,state:url.searchParams.get('state'),code:url.searchParams.get('code'),denied:url.searchParams.has('error')});}
     catch(error){console.error('oauth_failed:'+(error instanceof UserError?error.status:'internal'));return redirect(back+'?notice='+(isTest?'auth_failed':'oauth_failed'));}
     return redirect(back+'?notice=connected');
+   }
+   if(path==='/publicacoes'||path.startsWith('/publicacoes/')){
+    if(missing.length||!publications)throw new UserError('Configure a conexão principal primeiro.',409);
+    const connection=await store.summary();if(!connection?.user_id)throw new UserError('Conecte a conta oficial.',409);
+    const owner=String(connection.user_id);
+    if(path==='/publicacoes'&&req.method==='GET')return send(200,publicationView.list(await publications.list(owner),session));
+    if(path==='/publicacoes/preparar'&&req.method==='POST'){
+     const id=form.get('draftId')||'',revision=Number(form.get('revision'));
+     if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!Number.isSafeInteger(revision)||revision<1)throw new UserError('Rascunho inválido.');
+     const row=await publications.prepare(owner,id,revision);return redirect('/publicacoes/resultado/'+row.id);
+    }
+    const match=path.match(/^[/]publicacoes[/]resultado[/]([A-Za-z0-9_-]{43})$/);
+    if(match&&req.method==='GET')return send(200,publicationView.attempt(await publications.result(match[1],owner),session));
+    if(['/publicacoes/publicar','/publicacoes/pausar'].includes(path)&&req.method==='POST'){
+     const id=form.get('attemptId')||'';
+     if(!/^[A-Za-z0-9_-]{43}$/.test(id))throw new UserError('Publicação inválida.');
+     if(path==='/publicacoes/publicar'){
+      if(form.get('confirm')!=='official')throw new UserError('Revise e confirme a publicação na conta oficial.');
+      await publications.run(id,owner);
+     }else await publications.pause(id,owner);
+     return redirect('/publicacoes/resultado/'+id);
+    }
    }
    if(path==='/testes'||path.startsWith('/testes/')){
     if(missing.length||!lab||!testMeli)throw new UserError('Conclua a configuração do aplicativo primeiro.',409);
@@ -153,8 +177,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?createMeli({store,crypto,...settings}):null;
   const testMeli=meli?createMeli({...settings,store:store.testing,crypto,expectedSeller:'',requireTestUser:true}):null;
   const lab=meli?createLab({store,live:meli,test:testMeli,crypto}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.4.0 iniciado.'));
+  const publications=meli?createPublications({store,meli}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.5.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

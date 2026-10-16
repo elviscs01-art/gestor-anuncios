@@ -67,6 +67,20 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   if(String(profile.id)!==String(expected)||!profile.tags?.includes('test_user')||profile.site_id!=='MLB')throw new UserError('Envio bloqueado: a conta precisa ser a conta brasileira de teste cadastrada.',403);
   return {token,profile};
  }
+ async function officialAccess(expected){
+  if(requireTestUser)throw new UserError('Use a conexão da conta oficial.',403);
+  let token=await access(),profile;
+  try{profile=await call('/users/me',{token});}catch(e){if(e.remoteStatus!==401)throw e;token=await access(token);profile=await call('/users/me',{token});}
+  if(String(profile.id)!==String(expected)||profile.site_id!=='MLB'||profile.tags?.includes('test_user'))throw new UserError('A conta oficial conectada não corresponde ao destino revisado.',403);
+  return {token,profile};
+ }
+ async function ownedOfficial(itemId,expected){
+  const {token}=await officialAccess(expected);
+  if(!/^MLB[0-9]+$/.test(itemId))throw new UserError('Código de anúncio inválido.');
+  const item=await call('/items/'+itemId,{token});
+  if(String(item.seller_id)!==String(expected))throw new UserError('O anúncio não pertence à conta oficial.',403);
+  return {token,item};
+ }
  async function mutation(path,token,body,method='POST'){
   let response;
   try{response=await fetcher(API+path,{method,redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(body)});}
@@ -82,6 +96,38 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  }
  return {
   redirectUri,
+  async prepareOfficial(draft,expected){
+   const {profile}=await officialAccess(expected);
+   if(draft.sellerId!==String(expected))throw new UserError('O rascunho pertence a outra conta.',403);
+   const [category,schema,shipping]=await Promise.all([get('/categories/'+draft.categoryId),get('/categories/'+draft.categoryId+'/attributes'),get('/users/'+encodeURIComponent(expected)+'/shipping_preferences')]);
+   if(category.id!==draft.categoryId||!Array.isArray(schema))throw new UserError('Ficha técnica indisponível.',502);
+   const copy=structuredClone(draft);copy.mode=profile.tags?.includes('user_product_seller')?'family':'title';
+   const prepared=preparePayload(copy,schema,category.settings||{});
+   if(prepared.issues.length)throw new UserError(prepared.issues.join(' '));
+   const modes=shipping.modes||shipping.shipping_modes||profile.shipping_modes||[];
+   if(!prepared.payload.shipping?.mode||!modes.includes(prepared.payload.shipping.mode))throw new UserError('A modalidade de envio do rascunho não está habilitada na conta. Revise o frete antes de publicar.',409);
+   if(draft.validation&&!draft.validation.ok&&draft.validation.outcome!=='warnings_only')throw new UserError('O rascunho tem pendências de validação. Corrija os campos e valide novamente.',409);
+   return {kind:'official',sellerId:String(profile.id),sellerName:String(profile.nickname||profile.id),sourceId:draft.sourceId,payload:prepared.payload,description:copy.values.description,validation:copy.validation||null};
+  },
+  async createOfficialListing(snapshot,expected){
+   const {token}=await officialAccess(expected);
+   if(snapshot.kind!=='official'||snapshot.sellerId!==String(expected)||snapshot.payload.id||snapshot.payload.user_product_id||snapshot.payload.catalog_product_id)throw new UserError('Prévia inválida para publicação.',403);
+   const item=await mutation('/items',token,snapshot.payload);
+   if(!/^MLB[0-9]+$/.test(item.id||'')||String(item.seller_id)!==String(expected)||item.id===snapshot.sourceId){const e=new UserError('Resposta de criação inesperada. Confira a conta antes de tentar novamente.',502);e.uncertain=true;throw e;}
+   return {id:item.id,status:String(item.status||'não informado')};
+  },
+  async pauseOfficialListing(itemId,expected){
+   const {token,item}=await ownedOfficial(itemId,expected);
+   if(item.status==='closed')return 'closed';
+   const result=await mutation('/items/'+itemId,token,{status:'paused'},'PUT');
+   if(result.status!=='paused')throw new UserError('A pausa não foi confirmada. Confira o anúncio no Mercado Livre.',409);
+   return 'paused';
+  },
+  async describeOfficialListing(itemId,expected,description){
+   const {token}=await ownedOfficial(itemId,expected);
+   if(description.trim())await mutation('/items/'+itemId+'/description',token,{plain_text:description});
+  },
+
   async createTestUser(){
    if(requireTestUser)throw new UserError('Use a conexão principal para gerar a conta de teste.',403);
    const token=await access();const result=await mutation('/users/test_user',token,{site_id:'MLB'});

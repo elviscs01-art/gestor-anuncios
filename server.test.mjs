@@ -94,3 +94,15 @@ test('test creation routes enforce login, origin, CSRF and explicit confirmation
  assert.equal(calls,0);
  assert.equal((await h.post('/testes/publicar',{...body,csrf:session.csrf},{cookie})).status,303);assert.equal(calls,1);
 });
+
+test('official publication requires its own confirmation, authenticated CSRF and POST',async()=>{
+ let calls=0;const store=new SetupSessions();store.summary=async()=>({user_id:'123'});
+ const h=harness({store,settings:{...settings,databaseUrl:'yes',key:'yes',clientId:'1',clientSecret:'yes'},publications:{run:async()=>{calls++;}}});
+ assert.equal((await h.post('/publicacoes/publicar',{})).headers.location,'/login');
+ const {cookie,session}=await h.login(),body={attemptId:'a'.repeat(43),csrf:session.csrf,confirm:'official'};
+ assert.equal((await h.post('/publicacoes/publicar',{...body,confirm:'test'},{cookie})).status,400);
+ assert.equal((await h.post('/publicacoes/publicar',{...body,csrf:'wrong'},{cookie})).status,403);
+ assert.equal((await h.post('/publicacoes/publicar',body,{cookie,origin:'https://other.example'})).status,403);
+ assert.equal((await h.request('/publicacoes/publicar',{headers:{cookie}})).status,404);assert.equal(calls,0);
+ assert.equal((await h.post('/publicacoes/publicar',body,{cookie})).status,303);assert.equal(calls,1);
+});
