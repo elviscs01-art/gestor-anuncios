@@ -147,8 +147,8 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
     if(batchMatch){const id=batchMatch[1],action=batchMatch[2];let row=await replication.read(id,owner);
      if(!action&&req.method==='GET')return send(200,row.status==='editing'?replicationView.edit(row,session):replicationView.result(row,session));
      if(action==='publicar'&&req.method==='POST'){
-      const copies=row.data.copies.map((c,i)=>({title:String(form.get('title'+i)||''),type:String(form.get('type'+i)||'')}));
-      const result=await replication.submit(id,owner,copies,form.get('finalState'));
+      const copies=row.data.copies.map((c,i)=>({title:String(form.get('title'+i)||''),type:String(form.get('type'+i)||''),price:String(form.get('price'+i)??'')}));
+      const result=await replication.submit(id,owner,copies,form.get('finalState'),Object.fromEntries(['height','width','length','weight'].map(k=>[k,String(form.get('package_'+k)||'')])));
       if(Object.keys(result.errors).length)return send(400,replicationView.edit(result.row,session,result.errors));
       return redirect('/publicacoes/lote/'+id);
      }
@@ -261,7 +261,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const catalog=meli?createOverview({db:store.catalog,meli,kind:'catalog'}):null;
   const replication=meli?createReplication({db:store.replication,meli}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.9.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.9.1 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

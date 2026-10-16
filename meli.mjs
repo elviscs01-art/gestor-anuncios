@@ -1,3 +1,4 @@
+import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
 import {replicationSource,compatibilityPlan} from './replication.mjs';
 import {makeDraft,preparePayload,pictureUrl} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
@@ -207,7 +208,8 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const {item}=await ownedOfficial(id,owner),expected=snapshot.payload;
    const differences=[];for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key])differences.push(key);
    const sameValue=(a,b)=>{if(!b)return false;if(a.value_id!=null)return String(a.value_id)===String(b.value_id);if(a.values)return JSON.stringify(a.values.map(v=>v.id??v.name).sort())===JSON.stringify((b.values||[]).map(v=>v.id??v.name).sort());return String(a.value_name??'')===String(b.value_name??'');};
-   for(const a of expected.attributes||[])if(!sameValue(a,item.attributes?.find(b=>b.id===a.id)))differences.push('atributo '+a.id);
+   for(const a of expected.attributes||[])if(!packageFields.some(([k])=>packageId(k)===a.id)&&!sameValue(a,item.attributes?.find(b=>b.id===a.id)))differences.push('atributo '+a.id);
+   if(expected.attributes?.some(a=>packageFields.some(([k])=>packageId(k)===a.id))){const wanted=readPackaging(expected),received=readPackaging(item);if(wanted.weight!==received.weight||JSON.stringify([wanted.height,wanted.width,wanted.length].sort())!==JSON.stringify([received.height,received.width,received.length].sort()))differences.push('embalagem');}
    for(const a of expected.sale_terms||[])if(!sameValue(a,item.sale_terms?.find(b=>b.id===a.id)))differences.push('condição '+a.id);
    if(JSON.stringify(expected.pictures.map(p=>p.id).sort())!==JSON.stringify((item.pictures||[]).map(p=>p.id).sort()))differences.push('fotos');
    for(const key of ['mode','free_shipping','local_pick_up'])if(expected.shipping?.[key]!=null&&expected.shipping[key]!==item.shipping?.[key])differences.push('envio '+key);

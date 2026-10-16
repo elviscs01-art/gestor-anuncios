@@ -1,3 +1,18 @@
+# Atualização 0.9.1 — Embalagem, preço individual e títulos
+
+Substitua os arquivos na raiz do repositório e aguarde o deploy do Render (Gestor 0.9.1 iniciado). Crie um NOVO lote a partir do anúncio-base: lotes antigos preservam o conteúdo capturado na versão anterior.
+
+- Preço editável por cópia, preenchido com o preço do anúncio-base. Aceita vírgula decimal, ponto decimal e milhar brasileiro (1.234,56). Preço positivo e até duas casas decimais; erros preservam os campos preenchidos. Não há obrigação de alterar o preço original.
+- Títulos limitados a 60 caracteres (ou limite menor da categoria), no navegador e no servidor, com contador. Continua obrigatório mudar o título original e evitar títulos repetidos no lote.
+- Corrige a preparação dos atributos SELLER_PACKAGE_HEIGHT/WIDTH/LENGTH/WEIGHT. Eles não são descartados pelo filtro genérico de atributos. Importa medidas de embalagem explicitamente retornadas nesses atributos ou, na ausência deles, do campo shipping.dimensions (altura x largura x comprimento, peso).
+- Dimensões do produto (HEIGHT/WIDTH/WEIGHT) não são usadas como se fossem medidas da embalagem. Não inventa medidas ausentes, não arredonda valores fracionários arbitrariamente e não usa valores fictícios.
+- Se faltarem medidas, a tela pede preenchimento dos quatro campos, uma vez para todo o lote. Para ME2 são enviados inteiros positivos em cm/g. Unidades conhecidas são convertidas somente quando o resultado é um inteiro exato. ME1 mantém shipping.dimensions.
+- A conferência posterior aceita a reorganização das três dimensões pelo Mercado Livre, mas verifica o mesmo conjunto de medidas e o mesmo peso.
+
+Referência: https://developers.mercadolivre.com.br/devcenter/atributos
+
+---
+
 # Atualização 0.9.0 — Replicação de anúncios
 
 Envie todos os arquivos extraídos para a raiz do mesmo repositório, substituindo os de mesmo nome. Mantenha as variáveis do Render e o banco atual. O log deve mostrar Gestor 0.9.0 iniciado. As tabelas do novo fluxo são criadas automaticamente.
