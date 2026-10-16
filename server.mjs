@@ -1,3 +1,5 @@
+import {applyForm} from './drafts.mjs';
+import * as draftsView from './draft-views.mjs';
 import http from 'node:http';
 import {pathToFileURL} from 'node:url';
 import {hash,equal,random,vault,UserError,sessionStamp} from './security.mjs';
@@ -21,7 +23,7 @@ export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}
  const handler=async(req,res)=>{
   const nonce=random();
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin');
-  res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'self' 'unsafe-inline'; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
@@ -40,7 +42,7 @@ export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}
    let form;
    if(req.method==='POST'){
     if(!(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded'))throw new UserError('Formato de formulário inválido.',415);
-    let body='';for await(const chunk of req){body+=chunk.toString();if(Buffer.byteLength(body)>8192)throw new UserError('Formulário muito grande.',413);}
+    let body='';for await(const chunk of req){body+=chunk.toString();if(Buffer.byteLength(body)>(path.startsWith('/rascunhos/')?262144:8192))throw new UserError('Formulário muito grande.',413);}
     form=new URLSearchParams(body);
    }
    if(path==='/login'&&req.method==='POST'){
@@ -71,6 +73,38 @@ export function createApp({settings,store=new SetupSessions(),meli,now=Date.now}
     if(!meli||missing.length)throw new UserError('Configure e conecte a conta primeiro.',409);
     return send(200,view.report(await meli.inspect((form.get('item')||'').trim().toUpperCase()),session));
    }
+   if(path==='/rascunhos'||path.startsWith('/rascunhos/')){
+    if(missing.length||!meli)throw new UserError('Configure e conecte a conta antes de preparar rascunhos.',409);
+    const connection=await store.summary();
+    if(!connection?.user_id)throw new UserError('Conecte sua conta do Mercado Livre primeiro.',409);
+    const seller=String(connection.user_id);
+    if(path==='/rascunhos'&&req.method==='GET')return send(200,draftsView.list(await store.listDrafts(seller),session));
+    if(path==='/rascunhos/criar'&&req.method==='POST'){
+     const data=await meli.draftSource((form.get('item')||'').trim().toUpperCase());
+     if(data.sellerId!==seller)throw new UserError('A conta conectada mudou. Atualize a página.',409);
+     const id=random();await store.createDraft(id,seller,data);return redirect('/rascunhos/'+id);
+    }
+    const route=path.match(/^[/]rascunhos[/]([A-Za-z0-9_-]{43})$/);
+    if(route&&req.method==='GET'){
+     const row=await store.getDraft(route[1],seller);if(!row)throw new UserError('Rascunho não encontrado.',404);
+     return send(200,draftsView.editor(row,session,url.searchParams.get('saved')==='1'?'Rascunho salvo.':''));
+    }
+    if(['/rascunhos/salvar','/rascunhos/validar'].includes(path)&&req.method==='POST'){
+     const id=form.get('draftId')||'',revision=Number(form.get('revision'));
+     if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!Number.isSafeInteger(revision)||revision<1)throw new UserError('Identificação de rascunho inválida.');
+     const old=await store.getDraft(id,seller);if(!old)throw new UserError('Rascunho não encontrado.',404);
+     if(old.revision!==revision)throw new UserError('Este rascunho foi alterado em outra aba. Reabra a versão salva antes de continuar.',409);
+     const row=await store.updateDraft(id,seller,revision,applyForm(old.data,form));
+     if(!row)throw new UserError('O rascunho mudou em outra aba. Reabra a versão salva.',409);
+     if(path==='/rascunhos/salvar')return redirect('/rascunhos/'+id+'?saved=1');
+     let validation;
+     try{validation=await meli.validateDraft(row.data);}
+     catch(error){if(!(error instanceof UserError))throw error;return send(error.status,draftsView.editor(row,session,'Rascunho salvo. '+error.message));}
+     const checked=await store.setDraftValidation(id,seller,row.revision,validation);
+     if(!checked)throw new UserError('O rascunho mudou durante a validação. Abra e valide a versão mais recente.',409);
+     return redirect('/rascunhos/'+id);
+    }
+   }
    return send(404,view.errorPage('Página não encontrada.',session));
   }catch(error){
    const known=error instanceof UserError;
@@ -88,7 +122,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const store=settings.databaseUrl?await postgres(settings.databaseUrl):new SetupSessions();
   const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?createMeli({store,crypto,...settings}):null;
   const {server}=createApp({settings,store,meli});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.2 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.3 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

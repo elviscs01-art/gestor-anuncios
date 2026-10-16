@@ -19,8 +19,14 @@ export async function postgres(url) {
  verifier text NOT NULL, expires bigint NOT NULL);
  CREATE TABLE IF NOT EXISTS login_limit (id int PRIMARY KEY CHECK(id=1), started timestamptz NOT NULL, attempts int NOT NULL);
  CREATE TABLE IF NOT EXISTS meli_connection (id int PRIMARY KEY CHECK(id=1), user_id text NOT NULL,
- encrypted text NOT NULL, expires bigint NOT NULL, scope text NOT NULL, status text NOT NULL);`);
+ encrypted text NOT NULL, expires bigint NOT NULL, scope text NOT NULL, status text NOT NULL);
+ CREATE TABLE IF NOT EXISTS listing_drafts (id text PRIMARY KEY, seller_id text NOT NULL, revision integer NOT NULL DEFAULT 1, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());`);
  const store={
+  async createDraft(id,seller,data){await pool.query('INSERT INTO listing_drafts(id,seller_id,data) VALUES($1,$2,$3)',[id,seller,JSON.stringify(data)]);},
+  async getDraft(id,seller){const {rows}=await pool.query('SELECT id,revision,data,updated_at FROM listing_drafts WHERE id=$1 AND seller_id=$2',[id,seller]);return rows[0]||null;},
+  async listDrafts(seller){const {rows}=await pool.query("SELECT id,revision,data->'values'->>'name' AS name,data->>'sourceId' AS source_id,updated_at FROM listing_drafts WHERE seller_id=$1 ORDER BY updated_at DESC LIMIT 50",[seller]);return rows;},
+  async updateDraft(id,seller,revision,data){const {rows}=await pool.query('UPDATE listing_drafts SET data=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND seller_id=$2 AND revision=$3 RETURNING id,revision,data,updated_at',[id,seller,revision,JSON.stringify(data)]);return rows[0]||null;},
+  async setDraftValidation(id,seller,revision,validation){const {rows}=await pool.query("UPDATE listing_drafts SET data=jsonb_set(data,'{validation}',$4::jsonb),updated_at=now() WHERE id=$1 AND seller_id=$2 AND revision=$3 RETURNING id,revision,data,updated_at",[id,seller,revision,JSON.stringify(validation)]);return rows[0]||null;},
   async ping(){await pool.query('SELECT 1');return true;},
   async getSession(id){const {rows}=await pool.query('SELECT csrf,stamp,expires FROM app_sessions WHERE id=$1 AND expires>$2',[id,Date.now()]);return rows[0]||null;},
   async putSession(id,s){await pool.query('DELETE FROM app_sessions WHERE expires<$1',[Date.now()]);await pool.query('INSERT INTO app_sessions(id,csrf,stamp,expires) VALUES($1,$2,$3,$4)',[id,s.csrf,s.stamp,s.expires]);},

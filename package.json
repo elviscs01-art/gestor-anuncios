@@ -1,6 +1,17 @@
 {
- "name":"gestor-anuncios","version":"0.2.0","private":true,"type":"module",
- "engines":{"node":">=22"},
- "scripts":{"start":"node server.mjs","check":"node --check server.mjs && node --check meli.mjs && node --check store.mjs && node --check security.mjs && node --check views.mjs","test":"node --test server.test.mjs meli.test.mjs"},
- "dependencies":{"pg":"^8.16.3"}
+  "name": "gestor-anuncios",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check meli.mjs && node --check store.mjs && node --check security.mjs && node --check views.mjs && node --check drafts.mjs && node --check draft-views.mjs",
+    "test": "node --test server.test.mjs meli.test.mjs drafts.test.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
 }

@@ -1,4 +1,44 @@
-# Gestor de anúncios — conexão Mercado Livre (0.2)
+# Gestor de anúncios — versão 0.3
+
+## Atualização para quem já está conectado
+
+1. Extraia gestor-anuncios-v0.3.zip.
+2. No GitHub, abra a pasta principal do repositório gestor-anuncios e use Add file > Upload files. Envie todos os arquivos extraídos, substituindo os de mesmo nome. Não envie o ZIP nem uma pasta externa envolvendo os arquivos.
+3. Confirme Commit changes e aguarde o deploy automático do Render. Se ele não iniciar, use Manual Deploy > Deploy latest commit.
+4. Mantenha o banco e todas as variáveis atuais. A nova tabela listing_drafts é criada automaticamente na inicialização; os dados e a autorização existentes são preservados.
+5. O comando de build continua npm ci && npm run check && npm test; o comando de início continua npm start.
+6. Abra o aplicativo, atualize a página e consulte seu anúncio. Clique em Criar rascunho a partir deste anúncio.
+7. Edite os campos e informe a quantidade para o novo anúncio. Salve o rascunho ou use Salvar e validar no Mercado Livre.
+8. Em Meus rascunhos você pode abrir os últimos 50 rascunhos salvos.
+
+## O que a versão faz
+
+Importa um anúncio simples da própria conta para um rascunho no PostgreSQL. Edita nome da família/título conforme o modelo, preço, quantidade, condição, tipo de anúncio, garantia, atributos e descrição; permite selecionar fotos já cadastradas. Consulta a categoria e seus atributos; atributos read_only e inferred não são enviados. Confere os dados principais por POST /items/validate. A resposta 204 significa aceitação desse conjunto de dados pelo validador, não publicação nem garantia de aprovação final.
+
+A referência e o rascunho permanecem separados. Identificadores do anúncio, User Product, estado de publicação e vínculos de catálogo não são copiados para o envio. No modelo User Products é enviado family_name, sem title; o Mercado Livre gera o título. O estoque da referência não é copiado automaticamente.
+
+## Limites desta etapa
+
+Esta versão não publica nem altera anúncios. Descrição é salva, mas não é enviada ao validador de itens; compatibilidades não são transferidas nesta etapa. Seu número é exibido apenas como referência. Não há auditoria automática da aplicação mecânica das peças.
+
+O formulário começa por um anúncio simples existente. Criação sem referência, importação de anúncios com variações, fotos novas, gestão de frete, publicação em catálogo e transferência de compatibilidades serão tratados nas próximas etapas. A configuração básica de envio da referência é aproveitada; modalidades específicas e condições finais de frete/taxas ainda precisam ser verificadas antes de publicar.
+
+As validações locais e da API podem pedir novos campos. Alterar um rascunho invalida o resultado anterior. Alterações simultâneas em duas abas geram aviso, em vez de sobrescrever silenciosamente uma versão mais recente. O rascunho é salvo antes de consultar o validador.
+
+## Verificação
+
+26 testes automatizados passaram com dados e serviços simulados, abrangendo login, autorização, importação, campos, propriedade do vendedor, validação e salvamento. A nova tabela e a chamada real ao validador devem ser verificadas no Render com a conta conectada.
+
+## Fontes para esta versão
+
+- https://developers.mercadolivre.com.br/pt_br/guia-para-produtos/preco-variacao
+- https://developers.mercadolivre.com.br/pt_br/user-products
+- https://developers.mercadolivre.com.br/pt_br/tendencias/validador-de-publicacoes
+- https://developers.mercadolivre.com.br/pt_br/api-docs-pt-br/atributos
+
+---
+
+# Referência de configuração inicial (0.2)
 
 Esta atualização adiciona login por formulário, logout, autorização OAuth com PKCE, armazenamento criptografado de tokens em PostgreSQL e consulta de um anúncio da conta conectada. O aplicativo ainda não cria, edita, pausa ou encerra anúncios. As únicas chamadas POST ao Mercado Livre são as trocas de autorização e renovação de acesso.
 

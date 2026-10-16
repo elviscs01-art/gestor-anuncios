@@ -1,3 +1,4 @@
+import {makeDraft,preparePayload} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
 const API='https://api.mercadolibre.com';
 export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',fetcher=fetch,now=Date.now}){
@@ -49,6 +50,39 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  }
  return {
   redirectUri,
+  async draftSource(itemId){
+   const result=await this.inspect(itemId);
+   if(!/^MLB[0-9]+$/.test(result.item.category_id||''))throw new UserError('Categoria do anúncio inválida.',502);
+   const [category,schema]=await Promise.all([get('/categories/'+result.item.category_id),get('/categories/'+result.item.category_id+'/attributes')]);
+   return makeDraft(result,category,schema);
+  },
+  async validateDraft(draft){
+   const profile=await get('/users/me');
+   if(String(profile.id)!==draft.sellerId)throw new UserError('O rascunho pertence a outra conta.',403);
+   const [category,schema]=await Promise.all([get('/categories/'+draft.categoryId),get('/categories/'+draft.categoryId+'/attributes')]);
+   if(!Array.isArray(schema)||category.id!==draft.categoryId)throw new UserError('A ficha técnica da categoria está indisponível.',502);
+   const activeMode=profile.tags?.includes('user_product_seller')?'family':'title';
+   if(activeMode==='family'&&draft.mode!=='family')throw new UserError('O modelo de publicação da conta mudou. Crie um novo rascunho a partir do anúncio.',409);
+   const prepared=preparePayload(draft,schema,category.settings||{});
+   if(prepared.issues.length)return {ok:false,stage:'local',issues:prepared.issues,checkedAt:new Date(now()).toISOString()};
+   const token=await access();
+   const send=async current=>{
+    try{return await fetcher(API+'/items/validate',{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+current,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(prepared.payload)});}
+    catch{throw new UserError('O validador do Mercado Livre não respondeu. O rascunho foi salvo; tente validar novamente.',502);}
+   };
+   let response=await send(token);
+   if(response.status===401)response=await send(await access(token));
+   if(response.status===204)return {ok:true,stage:'remote',issues:[],checkedAt:new Date(now()).toISOString()};
+   if([400,422].includes(response.status)){
+    let data;try{data=await response.json();}catch{throw new UserError('Resposta inesperada do validador. O rascunho permanece salvo.',502);}
+    const causes=Array.isArray(data.cause)?data.cause:[];
+    const issues=causes.slice(0,60).map(c=>[c.code,c.message].filter(x=>typeof x==='string').join(': ').slice(0,1800)).filter(Boolean);
+    if(!issues.length)issues.push('O Mercado Livre recusou os dados enviados'+(typeof data.error==='string'?': '+data.error.slice(0,120):'.'));
+    return {ok:false,stage:'remote',issues,checkedAt:new Date(now()).toISOString()};
+   }
+   const messages={401:'Reconecte sua conta para validar.',403:'O Mercado Livre negou a validação. Confira a permissão de publicação com leitura e escrita.',429:'Limite de consultas atingido. Aguarde antes de validar novamente.'};
+   throw new UserError(messages[response.status]||'Não foi possível confirmar a validação. Seu rascunho permanece salvo.',response.status===403?403:502);
+  },
   async begin(sessionId){const state=random(),verifier=random();await store.putFlow(hash(state),sessionId,crypto.seal(verifier,'pkce'));const url=new URL('https://auth.mercadolivre.com.br/authorization');for(const [k,v] of Object.entries({response_type:'code',client_id:clientId,redirect_uri:redirectUri,state,code_challenge:challenge(verifier),code_challenge_method:'S256'}))url.searchParams.set(k,v);return url.href;},
   async complete({state,code,denied,sessionId}){
    if(!state||state.length>200)throw new UserError('Autorização inválida ou expirada. Inicie a conexão novamente.');
