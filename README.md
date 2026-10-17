@@ -255,3 +255,15 @@ Não use os nomes das variáveis como seus valores. Não salve segredos no GitHu
 
 - https://developers.mercadolivre.com.br/pt_br/autenticacao-e-autorizacao/publicacao-de-produtos
 - https://developers.mercadolivre.com.br/pt_br/produto-consulta-de-usuarios/produto-sincronizacao-de-publicacoes
+
+## Versão 0.10.0 — Substituição de anúncios
+
+- Peso na replicação em kg, com até três casas decimais (1,5 kg = 1500 g). A API continua recebendo gramas inteiros. Formulários antigos ainda abertos sem marcador de unidade mantêm a interpretação em gramas.
+- Nova aba lista apenas contador total de vendas confirmado igual a zero, em ordem crescente de criação, com pesquisa por SKU/ID e atualização sem recarregar a página. Não significa ausência de vendas recentes.
+- Substituição sem edição: valida, cria, pausa e completa a cópia, confere descrição, atributos, fotos e compatibilidades e mantém o status original (ativo/pausado). Só então pausa, encerra e exclui o original, conferindo novamente vendas e pedidos associados.
+- Anúncios com catálogo, variações, dados obrigatórios ausentes ou compatibilidades não copiáveis continuam bloqueados. Em contas User Products, o título final é gerado pela plataforma; qualquer diferença do original bloqueia a remoção.
+- Novos códigos e histórico próprio: visitas, vendas e data de criação não são transferidos. Não há promessa de desempenho nem de aprovação pela plataforma.
+- Cada original tem uma operação persistida única. Falhas e respostas incertas interrompem o fluxo; não há repetição automática de criação ou exclusão. A tela informa os IDs e últimos status confirmados. Em uma interrupção, pode haver dois anúncios, ou o original pode estar pausado/encerrado; confira a conta antes de qualquer ação manual. Uma operação interrompida não pode ser reiniciada nesta versão.
+- As chamadas são protegidas por sessão, origem, CSRF e vendedor conectado. Testes locais usam respostas simuladas; não publicam nem excluem anúncios reais.
+
+Atualização: substituir os arquivos do repositório pelos arquivos da raiz do ZIP e aguardar o deploy. A tabela de substituições é criada automaticamente no banco existente. Não alterar as variáveis de ambiente nem remover o banco.

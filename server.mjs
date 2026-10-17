@@ -1,8 +1,12 @@
+import {createReplacement} from './replacement.mjs';
+import * as replacementView from './replacement-views.mjs';
+import {kgToGrams} from './replication-fields.mjs';
 import {createReplication} from './replication.mjs';
 import * as replicationView from './replication-views.mjs';
 import {createOverview,range} from './overview.mjs';
 import * as overviewView from './overview-views.mjs';
 import {readFileSync} from 'node:fs';
+const replacementScript=readFileSync(new URL('./replacement-client.js',import.meta.url),'utf8');
 const replicationScript=readFileSync(new URL('./replication-client.js',import.meta.url),'utf8');
 const overviewScript=readFileSync(new URL('./overview-client.js',import.meta.url),'utf8');
 const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
@@ -29,7 +33,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -41,12 +45,13 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes'].some(p=>req.url.startsWith(p));
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
+   if(req.method==='GET'&&path==='/replacement.js')return send(200,replacementScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/replication.js')return send(200,replicationScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/overview.js')return send(200,overviewScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsScript,'text/javascript; charset=utf-8');
@@ -128,6 +133,20 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      return redirect('/metricas?auto=1');
     }
    }
+   if(path==='/substituicoes'||path.startsWith('/substituicoes/')){
+    const connection=await store.summary();if(missing.length||!replacement||!catalog||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);const owner=String(connection.user_id);
+    if(path==='/substituicoes'&&req.method==='GET')return send(200,replacementView.list(await catalog.read(owner),await replacement.list(owner),session,url.searchParams));
+    if(['/substituicoes/lista','/substituicoes/atualizar','/substituicoes/coletar'].includes(path)){
+     if(path==='/substituicoes/atualizar'&&req.method==='POST')await catalog.start(owner);
+     else if(path==='/substituicoes/coletar'&&req.method==='POST')await catalog.advance(owner);
+     else if(!(path==='/substituicoes/lista'&&req.method==='GET'))throw new UserError('Método não permitido.',405);
+     return send(200,JSON.stringify(replacementView.listState(await catalog.read(owner),await replacement.list(owner),session,url.searchParams)),'application/json');
+    }
+    if(path==='/substituicoes/iniciar'&&req.method==='POST'){const row=await replacement.begin(owner,form.get('item'));return redirect('/substituicoes/resultado/'+row.id);}
+    const match=path.match(/^[/]substituicoes[/]resultado[/]([A-Za-z0-9_-]{43})(?:[/](avancar|dados))?$/);
+    if(match){let row=await replacement.read(match[1],owner);if(!match[2]&&req.method==='GET')return send(200,replacementView.result(row,session));if(match[2]==='avancar'&&req.method==='POST')row=await replacement.advance(match[1],owner);else if(!(match[2]==='dados'&&req.method==='GET'))throw new UserError('Método não permitido.',405);return send(200,JSON.stringify(replacementView.state(row)),'application/json');}
+    throw new UserError('Página não encontrada.',404);
+   }
    if(path==='/publicacoes'||path.startsWith('/publicacoes/')){
     if(missing.length||!publications)throw new UserError('Configure a conexão principal primeiro.',409);
     const connection=await store.summary();if(!connection?.user_id)throw new UserError('Conecte a conta oficial.',409);
@@ -148,8 +167,8 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      if(!action&&req.method==='GET')return send(200,row.status==='editing'?replicationView.edit(row,session):replicationView.result(row,session));
      if(action==='publicar'&&req.method==='POST'){
       const copies=row.data.copies.map((c,i)=>({title:String(form.get('title'+i)||''),type:String(form.get('type'+i)||''),price:String(form.get('price'+i)??'')}));
-      const result=await replication.submit(id,owner,copies,form.get('finalState'),Object.fromEntries(['height','width','length','weight'].map(k=>[k,String(form.get('package_'+k)||'')])));
-      if(Object.keys(result.errors).length)return send(400,replicationView.edit(result.row,session,result.errors));
+      const result=await replication.submit(id,owner,copies,form.get('finalState'),Object.fromEntries(['height','width','length','weight'].map(k=>[k,k==='weight'&&form.get('package_weight_unit')==='kg'?kgToGrams(form.get('package_weight')):String(form.get('package_'+k)||'')])));
+      if(Object.keys(result.errors).length){if(form.get('package_weight_unit')==='kg'){result.row.data.packageWeightKg=String(form.get('package_weight')||'');if(result.errors.package_weight)result.errors.package_weight='Informe o peso em kg, com até três casas decimais.';}return send(400,replicationView.edit(result.row,session,result.errors));}
       return redirect('/publicacoes/lote/'+id);
      }
      if(action==='avancar'&&req.method==='POST')row=await replication.advance(id,owner);
@@ -260,8 +279,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const dashboard=meli?createOverview({db:store.dashboard,meli,kind:'dashboard'}):null;
   const catalog=meli?createOverview({db:store.catalog,meli,kind:'catalog'}):null;
   const replication=meli?createReplication({db:store.replication,meli}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.9.1 iniciado.'));
+  const replacement=meli?createReplacement({db:store.replacement,meli}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.10.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

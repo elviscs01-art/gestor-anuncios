@@ -28,3 +28,6 @@ export function applyPackaging(source,values){
  if(provided){copy.packaging={...values};copy.payload.attributes=copy.payload.attributes.filter(a=>!packageFields.some(([key])=>a.id===packageId(key)));for(const [key,,unit] of packageFields)copy.payload.attributes.push({id:packageId(key),value_name:Number(values[key])+' '+unit});}
  return {source:copy,errors};
 }
+
+export function kgToGrams(raw){const m=String(raw??'').trim().match(/^(\d+)(?:[.,](\d{1,3}))?$/);if(!m)return '';const n=Number(m[1])*1000+Number((m[2]||'').padEnd(3,'0'));return Number.isSafeInteger(n)&&n>0?String(n):'';}
+export function gramsToKg(raw){return /^\d+$/.test(String(raw))&&Number(raw)>0?String(Number(raw)/1000).replace('.',','):'';}

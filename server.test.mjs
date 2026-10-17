@@ -43,12 +43,13 @@ test('overview data requires a session and refresh requires origin and csrf',asy
 test('replication routes bind owner, enforce csrf and preserve invalid title input',async()=>{
  const store=new SetupSessions();store.summary=async()=>({user_id:'123',status:'ready'});let submitted=0;
  const id='a'.repeat(43),row={id,status:'editing',data:{source:{sourceId:'MLB123456',sourceTitle:'Original',sourceFamily:'',sellerName:'Densul',payload:{price:100,available_quantity:2},compatibilities:[],maxTitle:60},copies:[{title:'Original',type:'gold_special'}]}};
- const replication={list:async owner=>{assert.equal(owner,'123');return [];},read:async(i,owner)=>{assert.equal(i,id);assert.equal(owner,'123');return row;},submit:async(i,owner,copies,state)=>{assert.equal(owner,'123');assert.equal(state,'active');submitted++;return {row:{...row,data:{...row.data,copies}},errors:{0:'Altere o título'}};}};
+ const replication={list:async owner=>{assert.equal(owner,'123');return [];},read:async(i,owner)=>{assert.equal(i,id);assert.equal(owner,'123');return row;},submit:async(i,owner,copies,state,pack)=>{assert.equal(owner,'123');assert.equal(state,'active');if(submitted)assert.equal(pack.weight,'1500');submitted++;return {row:{...row,data:{...row.data,copies}},errors:{0:'Altere o título'}};}};
  const h=harness({store,settings:{...settings,databaseUrl:'configured',key:'configured',clientId:'1',clientSecret:'test'},publications:{},catalog:{read:async()=>null},replication});
  assert.equal((await h.request('/publicacoes/lista',{headers:{accept:'application/json'}})).status,401);
  const {cookie,session}=await h.login();assert.match((await h.request('/publicacoes',{headers:{cookie}})).body,/Replicação de anúncios/);
  const route='/publicacoes/lote/'+id+'/publicar';assert.equal((await h.post(route,{}, {cookie})).status,403);assert.equal(submitted,0);
  const response=await h.post(route,{csrf:session.csrf,title0:'Original',type0:'gold_pro',finalState:'active'},{cookie});assert.equal(response.status,400);assert.match(response.body,/aria-invalid="true"/);assert.match(response.body,/value="gold_pro" selected/);assert.equal(submitted,1);
+ for(const fields of [{package_weight:'1,5',package_weight_unit:'kg'},{package_weight:'1500'}])assert.equal((await h.post(route,{csrf:session.csrf,title0:'Original',type0:'gold_pro',finalState:'active',...fields},{cookie})).status,400);assert.equal(submitted,3);
 });
 test('login, csrf, logout and protected cookies',async()=>{
  const {post,request,login}=harness();
@@ -154,3 +155,5 @@ test('diagnostic JSON endpoints update without redirects and preserve auth/CSRF 
  assert.equal(data.status,200);assert.ok(JSON.parse(data.body).resultsHtml);assert.equal(updates,1);
  const html=await h.request('/metricas',{headers:{cookie}});assert.match(html.headers['content-security-policy'],/connect-src 'self'/);
 });
+
+test('replacement endpoints enforce login origin CSRF and server-owned seller',async()=>{let calls=0;const store=new SetupSessions();store.summary=async()=>({user_id:'123'});const h=harness({store,settings:{...settings,databaseUrl:'yes',key:'yes',clientId:'1',clientSecret:'yes'},catalog:{},replacement:{begin:async(owner,item)=>{assert.equal(owner,'123');assert.equal(item,'MLB123456');calls++;return {id:'a'.repeat(43)};}}});assert.equal((await h.post('/substituicoes/iniciar',{})).headers.location,'/login');const {cookie,session}=await h.login(),body={csrf:session.csrf,item:'MLB123456',owner:'foreign'};assert.equal((await h.post('/substituicoes/iniciar',{...body,csrf:'wrong'},{cookie})).status,403);assert.equal((await h.post('/substituicoes/iniciar',body,{cookie,origin:'https://other.example'})).status,403);assert.equal((await h.request('/substituicoes/iniciar',{headers:{cookie}})).status,404);assert.equal(calls,0);assert.equal((await h.post('/substituicoes/iniciar',body,{cookie})).status,303);assert.equal(calls,1);});

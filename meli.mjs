@@ -1,3 +1,4 @@
+import {sameSource} from './replacement.mjs';
 import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
 import {replicationSource,compatibilityPlan} from './replication.mjs';
 import {makeDraft,preparePayload,pictureUrl} from './drafts.mjs';
@@ -84,6 +85,12 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   const item=await call('/items/'+itemId,{token});
   if(String(item.seller_id)!==String(expected))throw new UserError('O anúncio não pertence à conta oficial.',403);
   return {token,item};
+ }
+ async function assertUnsold(item,owner){
+  if(item.sold_quantity!==0)throw new UserError('O anúncio já tem vendas ou o contador não pôde ser confirmado. O original não será excluído.',409);
+  const q=new URLSearchParams({seller:String(owner),item:item.id,limit:'1'}),orders=await get('/orders/search?'+q);
+  if(!Array.isArray(orders.results)||!Number.isSafeInteger(orders.paging?.total))throw new UserError('Não foi possível conferir os pedidos do anúncio. Exclusão bloqueada.',502);
+  if(orders.paging.total!==0||orders.results.length)throw new UserError('Há pedidos associados ao anúncio. A substituição foi bloqueada para preservar o original.',409);
  }
  async function mutation(path,token,body,method='POST'){
   let response;
@@ -177,6 +184,28 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    return row;
   },
 
+  async replacementSource(id,owner){
+   const {item}=await ownedOfficial(id,owner);if(!['active','paused'].includes(item.status))throw new UserError('Somente anúncios ativos ou pausados podem ser substituídos neste fluxo. O original não foi alterado.',409);
+   await assertUnsold(item,owner);const source=await this.replicationSource(id,owner);return {...source,originalStatus:item.status};
+  },
+  async checkReplacementPair(source,snapshot,newId,owner,paused){
+   if(newId===source.sourceId)throw new UserError('O novo anúncio precisa ter um código diferente do original.',403);
+   const current=await this.replacementSource(source.sourceId,owner);if(!sameSource(source,current))throw new UserError('Os dados do original mudaram. A exclusão foi bloqueada.',409);
+   if(current.originalStatus!==(paused?'paused':source.originalStatus))throw new UserError('O status do original mudou. A exclusão foi bloqueada.',409);
+   await this.verifyReplication(newId,owner,snapshot);const {item}=await ownedOfficial(newId,owner);
+   if(item.status!==source.originalStatus)throw new UserError('O novo anúncio não confirmou o status esperado. O original não será excluído.',409);
+  },
+  async closeReplacementOriginal(oldId,newId,owner){
+   if(oldId===newId)throw new UserError('Códigos de anúncios inválidos.',403);
+   const {token,item}=await ownedOfficial(oldId,owner);await ownedOfficial(newId,owner);if(item.status!=='paused')throw new UserError('O original precisa estar pausado antes do encerramento.',409);await assertUnsold(item,owner);
+   const result=await mutation('/items/'+oldId,token,{status:'closed'},'PUT');if(result.status!=='closed')throw new UserError('Encerramento do original não confirmado. Confira o resultado.',409);return 'closed';
+  },
+  async deleteReplacementOriginal(source,snapshot,newId,owner){
+   if(source.sourceId===newId)throw new UserError('Códigos de anúncios inválidos.',403);
+   const {token,item}=await ownedOfficial(source.sourceId,owner);if(item.status!=='closed')throw new UserError('O original não está encerrado. A exclusão não foi enviada.',409);await assertUnsold(item,owner);
+   await this.verifyReplication(newId,owner,snapshot);const next=await ownedOfficial(newId,owner);if(next.item.status!==source.originalStatus)throw new UserError('O novo anúncio mudou de status. A exclusão não foi enviada.',409);
+   await mutation('/items/'+source.sourceId,token,{deleted:true},'PUT');const confirmed=await ownedOfficial(source.sourceId,owner);if(!confirmed.item.sub_status?.includes('deleted'))throw new UserError('A exclusão foi enviada, mas não confirmada. Confira os anúncios; não repita a criação.',409);
+  },
   async replicationSource(id,owner){
    const {profile}=await officialAccess(owner),{item}=await ownedOfficial(id,owner);
    const [category,schema]=await Promise.all([get('/categories/'+item.category_id),get('/categories/'+item.category_id+'/attributes')]);
@@ -206,7 +235,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   },
   async verifyReplication(id,owner,snapshot){
    const {item}=await ownedOfficial(id,owner),expected=snapshot.payload;
-   const differences=[];for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key])differences.push(key);
+   const differences=[];if(snapshot.expectedDisplayTitle&&item.title!==snapshot.expectedDisplayTitle)differences.push('título original');for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key])differences.push(key);
    const sameValue=(a,b)=>{if(!b)return false;if(a.value_id!=null)return String(a.value_id)===String(b.value_id);if(a.values)return JSON.stringify(a.values.map(v=>v.id??v.name).sort())===JSON.stringify((b.values||[]).map(v=>v.id??v.name).sort());return String(a.value_name??'')===String(b.value_name??'');};
    for(const a of expected.attributes||[])if(!packageFields.some(([k])=>packageId(k)===a.id)&&!sameValue(a,item.attributes?.find(b=>b.id===a.id)))differences.push('atributo '+a.id);
    if(expected.attributes?.some(a=>packageFields.some(([k])=>packageId(k)===a.id))){const wanted=readPackaging(expected),received=readPackaging(item);if(wanted.weight!==received.weight||JSON.stringify([wanted.height,wanted.width,wanted.length].sort())!==JSON.stringify([received.height,received.width,received.length].sort()))differences.push('embalagem');}
