@@ -45,7 +45,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes'].some(p=>req.url.startsWith(p));
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes','/sem-replicacao'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
@@ -132,6 +132,14 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      if(jsonMetrics)return jsonState();
      return redirect('/metricas?auto=1');
     }
+   }
+   if(path==='/sem-replicacao'||path.startsWith('/sem-replicacao/')){
+    const connection=await store.summary();if(missing.length||!catalog||!replication||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);const owner=String(connection.user_id);
+    if(path==='/sem-replicacao'&&req.method==='GET')return send(200,replicationView.list(await catalog.read(owner),await replication.list(owner),session,url.searchParams,true));
+    if(path==='/sem-replicacao/atualizar'&&req.method==='POST')await catalog.start(owner);
+    else if(path==='/sem-replicacao/coletar'&&req.method==='POST')await catalog.advance(owner);
+    else if(!(path==='/sem-replicacao/lista'&&req.method==='GET'))throw new UserError('Página não encontrada.',404);
+    return send(200,JSON.stringify(replicationView.listState(await catalog.read(owner),url.searchParams,true)),'application/json');
    }
    if(path==='/substituicoes'||path.startsWith('/substituicoes/')){
     const connection=await store.summary();if(missing.length||!replacement||!catalog||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);const owner=String(connection.user_id);
@@ -281,7 +289,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const replication=meli?createReplication({db:store.replication,meli}):null;
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.10.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.11.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {uniqueListings} from './unique-listings.mjs';
+import {listContent,list} from './replication-views.mjs';
+const row=(id,skus,created='2020-01-01')=>({id,skus,created,title:id});
+test('counts distinct listings for each SKU across every status, oldest first',()=>{const rows=[row('new',['A'],'2025-01-01'),row('old',['B']),row('repeat',['X']),{...row('paused',['X']),status:'paused'},row('blank',[' ']),row('double',['B'])];assert.deepEqual(uniqueListings(rows).rows.map(r=>r.id),['new']);assert.deepEqual(uniqueListings([row('n',['N'],'2025-01-01'),row('o',['O'])]).rows.map(r=>r.id),['o','n']);});
+test('duplicates within one listing count once; preserve SKU leading zero and case',()=>{assert.equal(uniqueListings([row('one',[' A ','A'])]).rows.length,1);assert.equal(uniqueListings([row('one',['01']),row('two',['1']),row('three',['a']),row('four',['A'])]).rows.length,4);assert.equal(uniqueListings([row('one',['A']),row('one',['A'])]).rows.length,1);});
+test('multi-SKU listings require every SKU to be unique; failures cannot imply uniqueness',()=>{assert.deepEqual(uniqueListings([row('one',['A','B']),row('two',['B'])]).rows,[]);assert.equal(uniqueListings([row('one',['A']),{id:'bad',error:'unavailable'}]).incomplete,true);});
+test('filter precedes search and pagination and uses same replication dialog',()=>{const job={snapshot:{rows:[row('MLB111111',['X']),row('MLB222222',['X']),row('MLB333333',['Y'])]}};assert.ok(!listContent(job,new URLSearchParams('q=MLB111111'),true).includes('data-item='));const html=list(job,[],{csrf:'test',page:'/sem-replicacao'},new URLSearchParams(),true);assert.match(html,/Anúncios sem replicação/);assert.ok(html.includes('data-base="/sem-replicacao"'));assert.ok(html.includes('action="/publicacoes/replicar"'));assert.ok(html.includes('data-item="MLB333333"'));assert.ok(!html.includes('data-item="MLB111111"'));});
+test('refresh with another listing removes the formerly unique SKU',()=>{const rows=[row('a',['X'])];assert.equal(uniqueListings(rows).rows.length,1);rows.push(row('b',['X']));assert.equal(uniqueListings(rows).rows.length,0);});

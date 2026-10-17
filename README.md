@@ -267,3 +267,6 @@ Não use os nomes das variáveis como seus valores. Não salve segredos no GitHu
 - As chamadas são protegidas por sessão, origem, CSRF e vendedor conectado. Testes locais usam respostas simuladas; não publicam nem excluem anúncios reais.
 
 Atualização: substituir os arquivos do repositório pelos arquivos da raiz do ZIP e aguardar o deploy. A tabela de substituições é criada automaticamente no banco existente. Não alterar as variáveis de ambiente nem remover o banco.
+
+## Versão 0.11.0 — Anúncios sem replicação
+Nova aba com SKUs presentes em apenas um ID de anúncio, ordenada por criação crescente. A contagem usa o catálogo inteiro, inclusive anúncios pausados/encerrados, antes de pesquisar ou paginar. SKUs vazios são excluídos; espaços externos são ignorados, mantendo maiúsculas/minúsculas e zeros à esquerda. Se houver vários SKUs no anúncio, todos devem ser únicos. Falhas de consulta de anúncios impedem a classificação para não sugerir unicidade incorreta. Usa o mesmo diálogo e editor de replicação, com título, preço e tipo. Atualize a lista depois de publicar para recalcular o filtro.
