@@ -1,6 +1,6 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {random,hash,UserError} from './security.mjs';
-export const VERSION='0.14.0';
+export const VERSION='0.15.0';
 // Future verified fixes list only the report IDs they resolve here.
 export const FIXED_ERROR_IDS=[]; // Entries must be {id, revision}; bare IDs are never deleted.
 const traffic=[];let activeCalls=0;

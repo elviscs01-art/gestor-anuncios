@@ -309,7 +309,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
   const quality=meli?createOverview({db:store.quality,meli,kind:'quality'}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.14.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.15.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

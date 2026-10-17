@@ -122,7 +122,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    if(!/^MLB\d+$/.test(id))throw new UserError('Código de anúncio inválido.');
    const item=await get('/items/'+id);
    if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio de outra conta.',403);
-   return {id,title:String(item.title||item.family_name||id),status:item.status,created:item.date_created,price:item.price,currency:item.currency_id,quantity:item.available_quantity,sold:item.sold_quantity,skus:[...new Set([item.seller_custom_field,...(item.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name),...(item.variations||[]).flatMap(v=>[v.seller_custom_field,...(v.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name)])].filter(Boolean))]};
+   return {id,title:String(item.title||item.family_name||id),status:item.status,created:item.date_created,price:item.price,currency:item.currency_id,permalink:item.permalink,quantity:item.available_quantity,sold:item.sold_quantity,skus:[...new Set([item.seller_custom_field,...(item.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name),...(item.variations||[]).flatMap(v=>[v.seller_custom_field,...(v.attributes||[]).filter(a=>a.id==='SELLER_SKU').map(a=>a.value_name)])].filter(Boolean))]};
   },
   async dashboardOrders(owner,{from,to,offset=0,paidOnly=false,cancelledOnly=false}){
    const params=new URLSearchParams({seller:String(owner),'order.date_created.from':from,'order.date_created.to':to,sort:'date_desc',limit:'50',offset:String(offset)});

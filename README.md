@@ -1,3 +1,13 @@
+# Atualização atual: 0.15.0 — Anúncios sem replicação
+
+A lista agora exige estoque disponível maior que zero. A contagem de anúncios por SKU continua considerando o catálogo inteiro, inclusive anúncios sem estoque, para não classificar produtos já replicados como únicos. Quantidade ausente ou inválida não é tratada como estoque disponível. O filtro utiliza o último catálogo carregado: clique em Atualizar anúncios para obter os dados atuais.
+
+O ID abre o anúncio no Mercado Livre em outra aba; cada SKU tem botão de copiar com confirmação. Esses controles não abrem o diálogo de replicação. A replicação permanece acessível pelo título e botão Replicar.
+
+Substitua os arquivos de mesmo nome na raiz do repositório e aguarde o deploy (Gestor 0.15.0 iniciado). Mantenha o banco e as variáveis. As melhorias no relatório da versão anterior estão incluídas; esta versão não marca os erros antigos como corrigidos.
+
+## Histórico
+
 # Atualização atual: 0.14.0 — Relatório de diagnóstico
 
 Substitua os arquivos de mesmo nome na raiz do repositório e aguarde o deploy do Render (Gestor 0.14.0 iniciado). Mantenha o banco e as variáveis atuais. A atualização melhora o relatório; os erros de anúncios recebidos ainda não foram corrigidos. Os novos detalhes são registrados nas próximas falhas. Consulte a seção Versão 0.14.0 ao final.
