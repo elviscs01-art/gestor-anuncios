@@ -1,4 +1,4 @@
-import {diagnosticContext,recordFailure,resolveFailure,errorInfo,diagnosticPrompt,observe} from './diagnostics.mjs';
+import {diagnosticContext,flushDiagnostics,recordFailure,resolveFailure,errorInfo,diagnosticPrompt,observe} from './diagnostics.mjs';
 import * as qualityView from './quality-views.mjs';
 import {createReplacement} from './replacement.mjs';
 import * as replacementView from './replacement-views.mjs';
@@ -289,7 +289,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    if(!res.headersSent)send(known?error.status:503,view.errorPage(known?error.message:'Serviço temporariamente indisponível. Confira a disponibilidade do banco e tente novamente.',session));else res.end();
   }
  };
- const handler=(req,res)=>diagnosticContext.run({reporter:store.diagnostics,route:new URL(req.url,settings.baseUrl).pathname,method:req.method,authorized:false,secrets:[settings.password,settings.key,settings.clientSecret,settings.databaseUrl]},()=>rawHandler(req,res));
+ const handler=(req,res)=>diagnosticContext.run({attemptId:random(),startedAt:new Date().toISOString(),events:[],apiEvents:[],reporter:store.diagnostics,route:new URL(req.url,settings.baseUrl).pathname,method:req.method,authorized:false,secrets:[settings.password,settings.key,settings.clientSecret,settings.databaseUrl]},async()=>{const context=diagnosticContext.getStore();try{return await rawHandler(req,res);}finally{await flushDiagnostics(context);}});
  const server=http.createServer(handler);server.requestTimeout=20000;server.headersTimeout=10000;
  return {server,handler};
 }
@@ -309,7 +309,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
   const quality=meli?createOverview({db:store.quality,meli,kind:'quality'}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.13.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.14.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

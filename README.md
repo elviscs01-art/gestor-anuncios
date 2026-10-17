@@ -1,3 +1,9 @@
+# Atualização atual: 0.14.0 — Relatório de diagnóstico
+
+Substitua os arquivos de mesmo nome na raiz do repositório e aguarde o deploy do Render (Gestor 0.14.0 iniciado). Mantenha o banco e as variáveis atuais. A atualização melhora o relatório; os erros de anúncios recebidos ainda não foram corrigidos. Os novos detalhes são registrados nas próximas falhas. Consulte a seção Versão 0.14.0 ao final.
+
+## Histórico de versões e instalação
+
 # Atualização 0.9.1 — Embalagem, preço individual e títulos
 
 Substitua os arquivos na raiz do repositório e aguarde o deploy do Render (Gestor 0.9.1 iniciado). Crie um NOVO lote a partir do anúncio-base: lotes antigos preservam o conteúdo capturado na versão anterior.
@@ -279,3 +285,16 @@ Cada anúncio abre a edição do Mercado Livre em outra aba: prioriza links de a
 Configurações oferece Copiar relatório de erros, sem exibir o conteúdo na página. Relatório com versão, operação, etapa, IDs, erro HTTP, códigos da API e resumo técnico da publicação quando disponível. Sem payloads completos, descrições, cabeçalhos ou credenciais; segredos conhecidos e padrões de tokens são removidos. Retenção de 7 dias e até 50 erros por conta; repetição da mesma operação acumula ocorrências. O relatório é local ao banco da aplicação, não é enviado a terceiros. A cópia não apaga evidências. Sucesso posterior da mesma operação resolve seu registro; futuras correções podem preencher FIXED_ERROR_IDS em diagnostics.mjs com os IDs efetivamente corrigidos para limpeza no deploy. Não limpar registros não relacionados. Erros anteriores à instalação não são importados.
 Substituições concluídas deixam a lista mesmo se o catálogo ainda estiver desatualizado; o histórico continua acessível. Tentativas bloqueadas têm botão Tentar substituição novamente. Antes de retomar, o app confere os anúncios. Sem criação prévia, prepara dados atuais; com cópia identificada, aproveita o mesmo ID, confere descrição e compatibilidades já aplicadas e continua a etapa pendente. Falha de criação com resposta inconclusiva e sem ID continua bloqueada para impedir duplicação. Registros antigos sem indicação de recusa confirmada são tratados como incertos. Uma operação que ficou com trava de processamento por queda de servidor continua exigindo conferência; a trava não expira automaticamente para evitar repetir publicações.
 Nenhuma publicação real é criada ou excluída pelos testes. Atualizar todos os arquivos na raiz do repositório, manter o banco e as variáveis atuais e aguardar deploy. A tabela adjustment_errors é criada automaticamente.
+
+## Versão 0.14.0 — Relatório de diagnóstico aprimorado
+Atualização restrita ao relatório. Não corrige os erros de anúncios já enviados e não altera as regras de publicação, comparação ou retomada.
+
+- Cada requisição/tentativa com falha gera um registro com identificador próprio. Falhas relacionadas ficam dentro dele; o ID do processo de substituição permite relacionar tentativas diferentes. Registros antigos continuam disponíveis no formato original.
+- Diferenças do anúncio informam campo, valor esperado e encontrado; descrições e valores longos usam tamanho e hash. Falhas de embalagem informam campos inválidos, valores e unidades internas (cm e g).
+- Histórico das etapas de substituição, IDs confirmados e indicação de checkpoint anterior ao envio. Estados armazenados são identificados como últimos estados conhecidos, sem sugerir consulta nova. Dados de etapas anteriores à atualização não podem ser recuperados retroativamente.
+- Chamadas da API registram método, caminho sem parâmetros, horário, duração, resposta HTTP, Retry-After quando disponível e contagens de concorrência e frequência no processo. Não são feitas consultas extras nem repetidas publicações para diagnóstico. Até 40 chamadas e 30 eventos por tentativa, com indicação de descarte quando excedidos. Contagens não representam outros servidores/aplicativos da conta.
+- Mantém cópia pelo botão em Configurações, sem mostrar o conteúdo na página, retenção de 7 dias e até 50 registros por conta. Não remove evidências só porque uma etapa posterior teve sucesso.
+- Limpeza por correção agora exige pares {id, revision} em FIXED_ERROR_IDS; só a revisão analisada é removida. IDs sem revisão não autorizam limpeza. A lista permanece vazia nesta versão: nenhum erro recebido foi marcado como corrigido.
+- O banco recebe automaticamente a coluna revision; registros antigos iniciam na revisão 1. Manter o banco e as variáveis atuais. Substituir os arquivos de mesmo nome na raiz do GitHub pelos arquivos do ZIP, sem criar subpasta, e aguardar o deploy no Render.
+
+Verificação local usa serviços e banco simulados. A migração PostgreSQL real e a conexão com Mercado Livre não são exercitadas pelos testes locais.

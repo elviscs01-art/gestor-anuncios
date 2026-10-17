@@ -1,3 +1,4 @@
+import {diagnosticDiff,recordFailure,errorInfo} from './diagnostics.mjs';
 import {UserError,random} from './security.mjs';
 import {applyPackaging,readPackaging} from './replication-fields.mjs';
 export function sameSource(a,b){
@@ -7,7 +8,7 @@ export function sameSource(a,b){
 }
 export function replacementSnapshot(source){
  const result=applyPackaging(source,source.packaging||readPackaging(source.payload));
- if(Object.keys(result.errors).length)throw new UserError('O anúncio-base não informa todas as medidas da embalagem. Como a substituição não permite edição, complete esses dados no anúncio original antes de tentar novamente. Nada foi excluído.',409);
+ if(Object.keys(result.errors).length){const error=new UserError('O anúncio-base não informa todas as medidas da embalagem. Como a substituição não permite edição, complete esses dados no anúncio original antes de tentar novamente. Nada foi excluído.',409);error.diagnosticDetails={sourceId:source.sourceId,validation:'package',values:source.packaging||readPackaging(source.payload),units:{height:'cm',width:'cm',length:'cm',weight:'g'},invalidFields:Object.keys(result.errors),reasons:result.errors};throw error;}
  const s=result.source;s.payload[s.mode]=s.mode==='family_name'?s.sourceFamily:s.sourceTitle;
  if(!s.payload[s.mode])throw new UserError('O nome original não pôde ser confirmado. Nada foi excluído.',409);
  s.expectedDisplayTitle=s.sourceTitle;
@@ -33,18 +34,19 @@ export function createReplacement({db,meli}){
    try{
     if(!d.newId){
      if(d.creationStarted&&!d.creationRejected)throw new UserError('A criação anterior não teve resposta conclusiva. Confira a conta; uma nova cópia não será criada automaticamente.',409);
-     const source=await meli.replacementSource(d.source.sourceId,owner);d={source,snapshot:replacementSnapshot(source),stage:'validate',oldStatus:source.originalStatus,newStatus:null};
+     const source=await meli.replacementSource(d.source.sourceId,owner);d={audit:d.audit||[],source,snapshot:replacementSnapshot(source),stage:'validate',oldStatus:source.originalStatus,newStatus:null};
     }else{Object.assign(d,await meli.recoverReplacement(d,owner));if(d.stage==='done')status='complete';}
     delete d.error;d.message=status==='complete'?'Exclusão do original confirmada. Substituição concluída.':'Tentativa retomada após conferir os anúncios existentes.';
-   }catch(e){status='blocked';d.error=msg(e);}
+   }catch(e){await recordFailure('replacement.retry:'+id,{operation:'replacement.retry',jobId:id,sourceId:d.source?.sourceId,newId:d.newId,stage:d.stage,...errorInfo(e)});status='blocked';d.error=msg(e);}
+   d.audit=[...(d.audit||[]),{stage:d.stage,event:status==='blocked'?'retry_failed':'retry_reconciled',at:new Date().toISOString(),oldStatus:d.oldStatus,newStatus:d.newStatus,newId:d.newId||null}].slice(-30);
    await db.finish(id,owner,claim.token,d,status);return this.read(id,owner);
   },
-  async advance(id,owner){const claim=await db.claim(id,owner);if(!claim)return this.read(id,owner);const d=claim.data;let status='queued';
+  async advance(id,owner){const claim=await db.claim(id,owner);if(!claim)return this.read(id,owner);const d=claim.data;let status='queued';const diagnosticStage=d.stage;d.audit=[...(d.audit||[]),{stage:diagnosticStage,event:'started',at:new Date().toISOString(),newId:d.newId||null}].slice(-30);
    try{
     switch(d.stage){
      case 'validate':{const result=await meli.validateReplication(d.snapshot,owner);d.warnings=result.warnings||[];if(!result.ok)throw new UserError(result.message,409);d.stage='create';d.message='Dados validados. Preparando a nova publicação.';break;}
      case 'create':{
-      const current=await meli.replacementSource(d.source.sourceId,owner);if(!sameSource(current,d.source)||current.originalStatus!==d.source.originalStatus)throw new UserError('O anúncio original mudou desde a preparação. Nenhum anúncio novo foi criado e nada foi excluído.',409);
+      const current=await meli.replacementSource(d.source.sourceId,owner);if(!sameSource(current,d.source)||current.originalStatus!==d.source.originalStatus){const error=new UserError('O anúncio original mudou desde a preparação. Nenhum anúncio novo foi criado e nada foi excluído.',409);error.diagnosticDetails=diagnosticDiff(d.source,current);throw error;}
       d.creationStarted=true;await db.checkpoint(id,owner,claim.token,d);
       const item=await meli.createOfficialListing(d.snapshot,owner);d.newId=item.id;d.newStatus=item.status;d.stage='pause_new';d.message='Novo anúncio criado. Completando os dados antes de remover o original.';break;}
      case 'pause_new':d.newStatus='não confirmado';await db.checkpoint(id,owner,claim.token,d);d.newStatus=await meli.pauseOfficialListing(d.newId,owner);if(d.newStatus!=='paused')throw new UserError('A nova publicação não confirmou a pausa. O original foi preservado.',409);d.stage='description';break;
@@ -65,7 +67,8 @@ export function createReplacement({db,meli}){
       await meli.deleteReplacementOriginal(d.source,d.snapshot,d.newId,owner);d.oldStatus='deleted';d.stage='done';d.message='Substituição concluída: novo anúncio conferido e original excluído.';status='complete';break;}
      default:throw new UserError('Etapa desconhecida. Confira o resultado antes de repetir.',409);
     }
-   }catch(e){if(d.stage==='create'&&d.creationStarted&&!d.newId&&e instanceof UserError&&e.uncertain===false)d.creationRejected=true;status='blocked';d.error=msg(e);d.message=d.newId?'A substituição foi interrompida. Confira abaixo os dois anúncios; não crie outra cópia.':'A substituição foi interrompida. O anúncio original não foi excluído.';if(d.creationStarted&&!d.newId)d.message='O resultado da criação precisa ser conferido. Não repita: pode existir um novo anúncio sem confirmação.';}
+   }catch(e){await recordFailure('replacement.advance:'+id,{operation:'replacement.advance',jobId:id,sourceId:d.source?.sourceId,newId:d.newId,stage:diagnosticStage,...errorInfo(e)});if(d.stage==='create'&&d.creationStarted&&!d.newId&&e instanceof UserError&&e.uncertain===false)d.creationRejected=true;status='blocked';d.error=msg(e);d.message=d.newId?'A substituição foi interrompida. Confira abaixo os dois anúncios; não crie outra cópia.':'A substituição foi interrompida. O anúncio original não foi excluído.';if(d.creationStarted&&!d.newId)d.message='O resultado da criação precisa ser conferido. Não repita: pode existir um novo anúncio sem confirmação.';}
+   d.audit=[...(d.audit||[]),{stage:diagnosticStage,event:status==='blocked'?'failed':'confirmed',at:new Date().toISOString(),oldStatus:d.oldStatus,newStatus:d.newStatus,newId:d.newId||null}].slice(-30);
    await db.finish(id,owner,claim.token,d,status);return this.read(id,owner);
   }
  };

@@ -1,4 +1,4 @@
-import {diagnosticContext} from './diagnostics.mjs';
+import {diagnosticContext,startApiCall,diagnosticDiff,recordFailure} from './diagnostics.mjs';
 import {qualityData,editorLink} from './quality.mjs';
 import {sameSource} from './replacement.mjs';
 import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
@@ -17,9 +17,10 @@ export function shippingSummary(data){
  return result;
 }
 export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',requireTestUser=false,fetcher=fetch,now=Date.now}){
+ const originalFetcher=fetcher;fetcher=async(url,options)=>{const end=startApiCall(url,options);let response;try{response=await originalFetcher(url,options);return response;}catch(e){await recordFailure('api.transport',{operation:'api.transport',origin:'transport',requestOutcome:'unconfirmed',endpoint:new URL(url).pathname,method:options?.method||'GET',message:'Não houve resposta HTTP confirmada.',errorType:e?.name});throw e;}finally{end(response);}};
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
  async function call(path,{token,form}={}){
-  const context=diagnosticContext.getStore();if(context)context.secrets.push(...[token,form?.code,form?.code_verifier,form?.client_secret,form?.refresh_token].filter(v=>typeof v==='string'&&v.length>=4));
+  const context=diagnosticContext.getStore();if(context)(context.secrets??=[]).push(...[token,form?.code,form?.code_verifier,form?.client_secret,form?.refresh_token].filter(v=>typeof v==='string'&&v.length>=4));
   let response;
   try{response=await fetcher(API+path,{method:form?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(12000),headers:form?{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}:{Authorization:`Bearer ${token}`,Accept:'application/json',...(path.startsWith('/shipments/')?{'x-format-new':'true'}:{})},...(form?{body:new URLSearchParams(form)}:{})});}
   catch{throw new UserError('Não foi possível acessar o Mercado Livre. Tente novamente; se ocorreu durante a autorização, inicie uma nova conexão.',502);}
@@ -200,7 +201,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    if(!['active','paused','closed'].includes(old.status)||!['active','paused'].includes(next.status))throw new UserError('Os anúncios estão em um estado que exige conferência no Mercado Livre.',409);
    await assertUnsold(old,owner);
    if(old.status==='closed'){await this.verifyReplication(d.newId,owner,d.snapshot);if(next.status!==d.source.originalStatus)throw new UserError('Confira o status da cópia antes de concluir a exclusão.',409);return {stage:'delete_old',oldStatus:'closed',newStatus:next.status};}
-   const current=await this.replicationSource(d.source.sourceId,owner);if(!sameSource(current,d.source))throw new UserError('Os dados do anúncio original mudaram. A cópia existente precisa ser conferida; outra não será criada.',409);
+   const current=await this.replicationSource(d.source.sourceId,owner);if(!sameSource(current,d.source)){const error=new UserError('Os dados do anúncio original mudaram. A cópia existente precisa ser conferida; outra não será criada.',409);error.diagnosticDetails=diagnosticDiff(d.source,current);throw error;}
    let stage=d.stage,remainingCompat;
    if(stage==='pause_new'&&next.status==='paused')stage='description';
    if(stage==='description'){
@@ -223,7 +224,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   },
   async checkReplacementPair(source,snapshot,newId,owner,paused){
    if(newId===source.sourceId)throw new UserError('O novo anúncio precisa ter um código diferente do original.',403);
-   const current=await this.replacementSource(source.sourceId,owner);if(!sameSource(source,current))throw new UserError('Os dados do original mudaram. A exclusão foi bloqueada.',409);
+   const current=await this.replacementSource(source.sourceId,owner);if(!sameSource(source,current)){const error=new UserError('Os dados do original mudaram. A exclusão foi bloqueada.',409);error.diagnosticDetails=diagnosticDiff(source,current);throw error;}
    if(current.originalStatus!==(paused?'paused':source.originalStatus))throw new UserError('O status do original mudou. A exclusão foi bloqueada.',409);
    await this.verifyReplication(newId,owner,snapshot);const {item}=await ownedOfficial(newId,owner);
    if(item.status!==source.originalStatus)throw new UserError('O novo anúncio não confirmou o status esperado. O original não será excluído.',409);
@@ -256,7 +257,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const causes=Array.isArray(data.cause)?data.cause:[],warnings=causes.filter(c=>c.type==='warning').map(c=>String(c.code||'')+': '+String(c.message||''));
    if(response.status===400&&causes.length&&causes.every(c=>c.type==='warning'))return {ok:true,warnings};
    if(response.ok&&data.valid===true)return {ok:true,warnings};
-   return {ok:false,message:'Validação recusada (HTTP '+response.status+'). '+causes.slice(0,15).map(c=>String(c.code||'')+': '+String(c.message||'')).join(' '),warnings};
+   return {ok:false,remoteStatus:response.status,diagnostic:{endpoint:'/items/validate',method:'POST',causes:causes.slice(0,15).map(c=>({code:c.code,type:c.type,message:c.message}))},message:'Validação recusada (HTTP '+response.status+'). '+causes.slice(0,15).map(c=>String(c.code||'')+': '+String(c.message||'')).join(' '),warnings};
   },
   async applyReplicationCompatibilities(id,owner,products){
    if(!products.length)return;
