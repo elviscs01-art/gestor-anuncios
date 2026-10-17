@@ -8,7 +8,7 @@ export function sameSource(a,b){
 }
 export function replacementSnapshot(source){
  const result=applyPackaging(source,source.packaging||readPackaging(source.payload));
- if(Object.keys(result.errors).length){const error=new UserError('O anúncio-base não informa todas as medidas da embalagem. Como a substituição não permite edição, complete esses dados no anúncio original antes de tentar novamente. Nada foi excluído.',409);error.diagnosticDetails={sourceId:source.sourceId,validation:'package',values:source.packaging||readPackaging(source.payload),units:{height:'cm',width:'cm',length:'cm',weight:'g'},invalidFields:Object.keys(result.errors),reasons:result.errors};throw error;}
+ if(Object.keys(result.errors).length){const error=new UserError('O anúncio-base não informa todas as medidas da embalagem. Como a substituição não permite edição, complete esses dados no anúncio original antes de tentar novamente. Nada foi excluído.',409);error.diagnosticDetails={sourceId:source.sourceId,validation:'package',sourceEvidence:source.packagingEvidence,values:source.packaging||readPackaging(source.payload),units:{height:'cm',width:'cm',length:'cm',weight:'g'},invalidFields:Object.keys(result.errors),reasons:result.errors};throw error;}
  const s=result.source;s.payload[s.mode]=s.mode==='family_name'?s.sourceFamily:s.sourceTitle;
  if(!s.payload[s.mode])throw new UserError('O nome original não pôde ser confirmado. Nada foi excluído.',409);
  s.expectedDisplayTitle=s.sourceTitle;

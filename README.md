@@ -1,3 +1,31 @@
+# Atualização atual: 0.16.0 — Conferência e retomada de anúncios
+
+Substitua os arquivos de mesmo nome na raiz do GitHub e aguarde o Render mostrar Gestor 0.16.0 iniciado. Mantenha o banco e as variáveis. A aba Anúncios sem replicação mantém o filtro de estoque, links de ID e cópia de SKU da versão 0.15.0.
+
+## Cópias já criadas
+Em Replicação de anúncios, abra Lotes recentes e o lote com pendência. Cada cópia identificada com status parcial oferece Retomar anúncio existente. A ação não cria outro anúncio: confere o mesmo ID, lê descrição e compatibilidades, preenche apenas o que falta e verifica tudo antes de ativar. Descrições ou veículos divergentes não são sobrescritos. Se a descrição já foi salva apesar de um timeout, não é reenviada. Criações sem ID confirmado e operações ainda travadas não são retomadas automaticamente.
+
+A conferência de family_name tolera diferenças de caixa e espaços apenas na replicação. Diferenças reais mostram o nome solicitado e o nome retornado. Nos lotes antigos, a primeira retomada pode apenas carregar essa informação; depois é possível revisar e marcar explicitamente a aceitação do nome retornado para concluir aquela cópia. Isso não envia uma alteração de nome à família no Mercado Livre. Se o nome mudar novamente, a conferência bloqueia de novo. A substituição de originais continua exigindo seus dados originais, inclusive título, e não oferece aceitação de nome diferente.
+
+## Compatibilidades e consultas
+O bloqueio local acima de 200 foi substituído por envio em grupos de até 200 por domínio, preservando notas e restrições e informando creation_source. O teto conservador é 6.000; compatibilidades de catálogo/universais ou respostas incompletas continuam bloqueadas. A conferência final precisa confirmar todos os veículos antes de ativar ou excluir um original. Se a plataforma ainda não apresentar todos os dados, o anúncio permanece com pendência e pode ser conferido novamente pela retomada.
+
+Chamadas de compatibilidade têm intervalo mínimo de 750 ms por instância do serviço. GET com HTTP 429 pode repetir no máximo duas vezes, respeitando Retry-After de até 5 segundos ou espera progressiva quando ausente. Esperas maiores retornam o erro para nova tentativa posterior. Não há repetição automática de POST/PUT/DELETE nem de troca de código/token. Outros aplicativos ou instâncias podem continuar causando limites de tráfego.
+
+## Embalagem e registros
+Quando um atributo de embalagem está vazio, a leitura pode usar shipping.dimensions informado pelo próprio anúncio. Valores explicitamente marcados como não aplicáveis não recebem esse fallback. Medidas do produto não são usadas como medidas de embalagem, e nenhum valor é inventado. Se todos os dados de embalagem realmente faltarem, a substituição continua bloqueada e exige completar o anúncio original. O relatório agora inclui também os dados de origem usados para ler essas medidas.
+
+Registros de divergências de conferência passam a incluir valores esperados e encontrados. Somente os dois registros conhecidos do bloqueio local de mais de 200 compatibilidades (revisão 1) são removidos no deploy. Erros de nome, timeout, medidas ausentes, limites de API e mudança do original são preservados enquanto seus casos concretos não forem confirmados. Não há alteração de anúncios reais durante a instalação.
+
+Validação local com API e banco simulados, incluindo concorrência, autorização, descrição já salva, veículos faltantes, mais de 200 veículos, revisão de nome e limites de consultas. PostgreSQL e a conta real não são exercitados pelos testes locais.
+
+Referências oficiais consultadas:
+- https://developers.mercadolivre.com.br/pt_br/compatibilidades-itens-e-produtos-de-autopecas
+- https://developers.mercadolivre.com.br/pt_br/publicacao-de-produtos/user-products
+- https://developers.mercadolivre.com.br/pt_br/guia-para-produtos/preco-variacao
+
+## Histórico
+
 # Atualização atual: 0.15.0 — Anúncios sem replicação
 
 A lista agora exige estoque disponível maior que zero. A contagem de anúncios por SKU continua considerando o catálogo inteiro, inclusive anúncios sem estoque, para não classificar produtos já replicados como únicos. Quantidade ausente ou inválida não é tratada como estoque disponível. O filtro utiliza o último catálogo carregado: clique em Atualizar anúncios para obter os dados atuais.

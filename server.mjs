@@ -187,7 +187,7 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      const id=form.get('requestId');if(!/^[A-Za-z0-9_-]{43}$/.test(id||''))throw new UserError('Solicitação inválida. Reabra a lista.');
      const row=await replication.begin(owner,form.get('item'),Number(form.get('count')),id);return redirect('/publicacoes/lote/'+row.id);
     }
-    const batchMatch=path.match(/^[/]publicacoes[/]lote[/]([A-Za-z0-9_-]{43})(?:[/](publicar|avancar|dados))?$/);
+    const batchMatch=path.match(/^[/]publicacoes[/]lote[/]([A-Za-z0-9_-]{43})(?:[/](publicar|avancar|dados|retomar))?$/);
     if(batchMatch){const id=batchMatch[1],action=batchMatch[2];let row=await replication.read(id,owner);
      if(!action&&req.method==='GET')return send(200,row.status==='editing'?replicationView.edit(row,session):replicationView.result(row,session));
      if(action==='publicar'&&req.method==='POST'){
@@ -196,9 +196,10 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
       if(Object.keys(result.errors).length){if(form.get('package_weight_unit')==='kg'){result.row.data.packageWeightKg=String(form.get('package_weight')||'');if(result.errors.package_weight)result.errors.package_weight='Informe o peso em kg, com até três casas decimais.';}return send(400,replicationView.edit(result.row,session,result.errors));}
       return redirect('/publicacoes/lote/'+id);
      }
+     if(action==='retomar'&&req.method==='POST'){const rawIndex=form.get('copy');if(!/^\d+$/.test(rawIndex||''))throw new UserError('Cópia inválida.');row=await replication.retry(id,owner,Number(rawIndex),String(form.get('acceptedFamily')||''));return redirect('/publicacoes/lote/'+id);}
      if(action==='avancar'&&req.method==='POST')row=await replication.advance(id,owner);
      else if(!(action==='dados'&&req.method==='GET'))throw new UserError('Método não permitido.',405);
-     return send(200,JSON.stringify(replicationView.batchState(row)),'application/json');
+     return send(200,JSON.stringify(replicationView.batchState(row,session)),'application/json');
     }
     if(path==='/publicacoes/historico'&&req.method==='GET')return send(200,publicationView.list(await publications.list(owner),session));
     if(path==='/publicacoes/preparar'&&req.method==='POST'){
@@ -309,7 +310,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
   const quality=meli?createOverview({db:store.quality,meli,kind:'quality'}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.15.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.16.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

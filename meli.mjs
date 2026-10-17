@@ -2,7 +2,7 @@ import {diagnosticContext,startApiCall,diagnosticDiff,recordFailure} from './dia
 import {qualityData,editorLink} from './quality.mjs';
 import {sameSource} from './replacement.mjs';
 import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
-import {replicationSource,compatibilityPlan} from './replication.mjs';
+import {replicationSource,compatibilityPlan,normalizeTitle} from './replication.mjs';
 import {makeDraft,preparePayload,pictureUrl} from './drafts.mjs';
 import {UserError,challenge,random,hash} from './security.mjs';
 const API='https://api.mercadolibre.com';
@@ -16,16 +16,19 @@ export function shippingSummary(data){
  });
  return result;
 }
-export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',requireTestUser=false,fetcher=fetch,now=Date.now}){
- const originalFetcher=fetcher;fetcher=async(url,options)=>{const end=startApiCall(url,options);let response;try{response=await originalFetcher(url,options);return response;}catch(e){await recordFailure('api.transport',{operation:'api.transport',origin:'transport',requestOutcome:'unconfirmed',endpoint:new URL(url).pathname,method:options?.method||'GET',message:'Não houve resposta HTTP confirmada.',errorType:e?.name});throw e;}finally{end(response);}};
+export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',requireTestUser=false,fetcher=fetch,now=Date.now,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
+ let compatibilityTurn=Promise.resolve(),nextCompatibilityAt=0;
+ async function paceCompatibility(){const turn=compatibilityTurn.then(async()=>{const delay=Math.max(0,nextCompatibilityAt-Date.now());if(delay)await sleep(delay);nextCompatibilityAt=Date.now()+750;});compatibilityTurn=turn.catch(()=>{});await turn;}
+ const originalFetcher=fetcher;fetcher=async(url,options)=>{if(new URL(url).pathname.includes('/compatibilities'))await paceCompatibility();const end=startApiCall(url,options);let response;try{response=await originalFetcher(url,options);return response;}catch(e){await recordFailure('api.transport',{operation:'api.transport',origin:'transport',requestOutcome:'unconfirmed',endpoint:new URL(url).pathname,method:options?.method||'GET',message:'Não houve resposta HTTP confirmada.',errorType:e?.name});throw e;}finally{end(response);}};
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
- async function call(path,{token,form}={}){
+ async function call(path,{token,form,readAttempt=0}={}){
   const context=diagnosticContext.getStore();if(context)(context.secrets??=[]).push(...[token,form?.code,form?.code_verifier,form?.client_secret,form?.refresh_token].filter(v=>typeof v==='string'&&v.length>=4));
   let response;
   try{response=await fetcher(API+path,{method:form?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(12000),headers:form?{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}:{Authorization:`Bearer ${token}`,Accept:'application/json',...(path.startsWith('/shipments/')?{'x-format-new':'true'}:{})},...(form?{body:new URLSearchParams(form)}:{})});}
   catch{throw new UserError('Não foi possível acessar o Mercado Livre. Tente novamente; se ocorreu durante a autorização, inicie uma nova conexão.',502);}
   let data;
   try{data=await response.json();}catch{throw new UserError('O Mercado Livre retornou uma resposta inesperada.',502);}
+  if(response.status===429&&!form&&readAttempt<2){const raw=response.headers.get('retry-after');const delay=raw===null?750*2**readAttempt:/^\d+(?:\.\d+)?$/.test(raw)?Number(raw)*1000:Math.max(0,Date.parse(raw)-Date.now());if(Number.isFinite(delay)&&delay<=5000){await sleep(delay);return call(path,{token,readAttempt:readAttempt+1});}}
   if(!response.ok){
    const messages={401:'O acesso não foi autorizado. Reconecte sua conta.',403:'O Mercado Livre negou esta consulta. Confira as permissões do aplicativo e a conta autorizada.',404:'O recurso não foi encontrado no Mercado Livre.',429:'O limite de consultas foi atingido. Aguarde antes de tentar novamente.'};
    const error=new UserError(messages[response.status]||'O Mercado Livre não concluiu a solicitação. Confira a configuração e tente novamente.',response.status>=500?502:response.status);
@@ -84,11 +87,11 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   return {token,profile};
  }
  async function ownedOfficial(itemId,expected){
-  const {token}=await officialAccess(expected);
+  const {token,profile}=await officialAccess(expected);
   if(!/^MLB[0-9]+$/.test(itemId))throw new UserError('Código de anúncio inválido.');
   const item=await call('/items/'+itemId,{token});
   if(String(item.seller_id)!==String(expected))throw new UserError('O anúncio não pertence à conta oficial.',403);
-  return {token,item};
+  return {token,item,profile};
  }
  async function assertUnsold(item,owner){
   if(item.sold_quantity!==0)throw new UserError('O anúncio já tem vendas ou o contador não pôde ser confirmado. O original não será excluído.',409);
@@ -241,12 +244,12 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    await mutation('/items/'+source.sourceId,token,{deleted:true},'PUT');const confirmed=await ownedOfficial(source.sourceId,owner);if(!confirmed.item.sub_status?.includes('deleted'))throw new UserError('A exclusão foi enviada, mas não confirmada. Confira os anúncios; não repita a criação.',409);
   },
   async replicationSource(id,owner){
-   const {profile}=await officialAccess(owner),{item}=await ownedOfficial(id,owner);
+   const {profile,item}=await ownedOfficial(id,owner);
    const [category,schema]=await Promise.all([get('/categories/'+item.category_id),get('/categories/'+item.category_id+'/attributes')]);
    let description;try{description=await get('/items/'+id+'/description');}catch(e){if(e.remoteStatus===404)description={plain_text:''};else throw e;}
    let compatibility;try{compatibility=await get('/items/'+id+'/compatibilities?extended=true');}catch(e){if(e.remoteStatus===404&&!item.attributes?.some(a=>a.id==='HAS_COMPATIBILITIES'&&(a.value_id==='242085'||String(a.value_name).toLowerCase()==='sim')))compatibility={products:[]};else throw e;}
    const source=replicationSource({item,profile,category,schema,description,compatibility});
-   if(source.compatibilities.length>200)throw new UserError('Este anúncio tem mais de 200 compatibilidades. A cópia integral desse volume requer um fluxo adicional.',409);
+   if(source.compatibilities.length>6000)throw new UserError('Este anúncio ultrapassa 6.000 compatibilidades. Confira o limite antes de replicar.',409);
    return source;
   },
   async validateReplication(snapshot,owner){
@@ -262,24 +265,51 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
   async applyReplicationCompatibilities(id,owner,products){
    if(!products.length)return;
    const {token,item}=await ownedOfficial(id,owner);
-   const groups=new Map();for(const p of products){if(!groups.has(p.domain))groups.set(p.domain,[]);const {domain,...body}=p;groups.get(domain).push(body);}
+   const groups=new Map();for(const p of products){if(!groups.has(p.domain))groups.set(p.domain,[]);const {domain,...body}=p;groups.get(domain).push({...body,creation_source:'DEFAULT'});}
    for(const [domain,rows] of groups){const path=item.user_product_id?'/user-products/'+encodeURIComponent(item.user_product_id)+'/compatibilities':'/items/'+id+'/compatibilities';
-    await mutation(path,token,{...(item.user_product_id?{domain_id:domain,category_id:item.category_id}:{}),products:rows});
+    for(let offset=0;offset<rows.length;offset+=200)await mutation(path,token,{...(item.user_product_id?{domain_id:domain,category_id:item.category_id}:{}),products:rows.slice(offset,offset+200)});
    }
   },
-  async verifyReplication(id,owner,snapshot){
+  async verifyReplication(id,owner,snapshot,{core=false}={}){
    const {item}=await ownedOfficial(id,owner),expected=snapshot.payload;
-   const differences=[];if(snapshot.expectedDisplayTitle&&item.title!==snapshot.expectedDisplayTitle)differences.push('título original');for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key])differences.push(key);
+   const differences=[];if(snapshot.expectedDisplayTitle&&item.title!==snapshot.expectedDisplayTitle)differences.push('título original');for(const key of ['price','currency_id','available_quantity','condition','listing_type_id','category_id','seller_custom_field','title','family_name'])if(expected[key]!=null&&item[key]!==expected[key]&&!(key==='family_name'&&!snapshot.expectedDisplayTitle&&normalizeTitle(item[key])===normalizeTitle(expected[key])))differences.push(key);
    const sameValue=(a,b)=>{if(!b)return false;if(a.value_id!=null)return String(a.value_id)===String(b.value_id);if(a.values)return JSON.stringify(a.values.map(v=>v.id??v.name).sort())===JSON.stringify((b.values||[]).map(v=>v.id??v.name).sort());return String(a.value_name??'')===String(b.value_name??'');};
    for(const a of expected.attributes||[])if(!packageFields.some(([k])=>packageId(k)===a.id)&&!sameValue(a,item.attributes?.find(b=>b.id===a.id)))differences.push('atributo '+a.id);
    if(expected.attributes?.some(a=>packageFields.some(([k])=>packageId(k)===a.id))){const wanted=readPackaging(expected),received=readPackaging(item);if(wanted.weight!==received.weight||JSON.stringify([wanted.height,wanted.width,wanted.length].sort())!==JSON.stringify([received.height,received.width,received.length].sort()))differences.push('embalagem');}
    for(const a of expected.sale_terms||[])if(!sameValue(a,item.sale_terms?.find(b=>b.id===a.id)))differences.push('condição '+a.id);
    if(JSON.stringify(expected.pictures.map(p=>p.id).sort())!==JSON.stringify((item.pictures||[]).map(p=>p.id).sort()))differences.push('fotos');
    for(const key of ['mode','free_shipping','local_pick_up'])if(expected.shipping?.[key]!=null&&expected.shipping[key]!==item.shipping?.[key])differences.push('envio '+key);
+   const fail=()=>{const error=new UserError('Anúncio criado, mas a conferência encontrou diferença em: '+differences.join(', ')+'. Confira os valores antes de concluir.',409);const diff=diagnosticDiff({payload:expected},{payload:Object.fromEntries(Object.keys(expected).map(k=>[k,item[k]]))});diff.changes=diff.changes.filter(c=>c.field!=='payload.family_name');if(differences.includes('family_name'))diff.changes.unshift({field:'payload.family_name',expected:expected.family_name,actual:item.family_name??null});if(diff.changes.length>40){diff.changes=diff.changes.slice(0,40);diff.truncated=true;}error.diagnosticDetails={differences,...diff};throw error;};
+   if(core){if(differences.length)fail();return;}
    const description=await get('/items/'+id+'/description').catch(e=>{if(e.remoteStatus===404)return {plain_text:''};throw e;});if(description.plain_text!==snapshot.description)differences.push('descrição');
    const compat=await get('/items/'+id+'/compatibilities?extended=true').catch(e=>{if(e.remoteStatus===404&&!snapshot.compatibilities.length)return {products:[]};throw e;});
    const got=compatibilityPlan(compat),canonical=p=>JSON.stringify([p.id,p.domain,p.note||'',p.restrictions||[]]);const expectedSet=new Set(snapshot.compatibilities.map(canonical));if(got.length!==expectedSet.size||got.some(p=>!expectedSet.has(canonical(p))))differences.push('compatibilidades');
-   if(differences.length)throw new UserError('Anúncio criado, mas a conferência encontrou diferença em: '+differences.join(', ')+'. Ele permanece pausado para revisão.',409);
+   if(differences.length)fail();
+  },
+  async recoverReplication(id,owner,snapshot,finalState){
+   if(id===snapshot.sourceId||!/^MLB\d+$/.test(id)||!['active','paused'].includes(finalState))throw new UserError('Cópia ou estado final inválido.',409);
+   let {item}=await ownedOfficial(id,owner);
+   if(item.id!==id)throw new UserError('O anúncio retornado não corresponde à cópia.',409);
+   if(!['active','paused'].includes(item.status))throw new UserError('Confira o estado deste anúncio no Mercado Livre antes de retomar.',409);
+   await this.verifyReplication(id,owner,snapshot,{core:true});
+   const description=await get('/items/'+id+'/description').catch(e=>{if(e.remoteStatus===404)return {plain_text:''};throw e;});
+   if(typeof description.plain_text!=='string')throw new UserError('Não foi possível confirmar a descrição existente.',409);
+   if(description.plain_text&&description.plain_text!==snapshot.description)throw new UserError('A descrição existente difere da esperada. Ela não será sobrescrita.',409);
+   const raw=await get('/items/'+id+'/compatibilities?extended=true').catch(e=>{if(e.remoteStatus===404&&!item.attributes?.some(a=>a.id==='HAS_COMPATIBILITIES'&&(a.value_id==='242085'||String(a.value_name).toLowerCase()==='sim')))return {products:[]};throw e;});
+   const got=compatibilityPlan(raw),expected=snapshot.compatibilities;
+   const equal=(a,b)=>sameSource({compatibilities:[a]},{compatibilities:[b]});
+   if(got.some(a=>!expected.some(b=>equal(a,b))))throw new UserError('Existem compatibilidades diferentes das esperadas. Confira o anúncio antes de retomar.',409);
+   const missing=expected.filter(b=>!got.some(a=>equal(a,b)));
+   if(description.plain_text!==snapshot.description||missing.length){
+    if(item.status!=='paused'){const status=await this.pauseOfficialListing(id,owner);if(status!=='paused')throw new UserError('Pausa da cópia não confirmada.',409);item.status=status;}
+    if(description.plain_text!==snapshot.description)await this.describeOfficialListing(id,owner,snapshot.description);
+    if(missing.length)await this.applyReplicationCompatibilities(id,owner,missing);
+   }
+   await this.verifyReplication(id,owner,snapshot);
+   item=(await ownedOfficial(id,owner)).item;
+   if(item.id!==id||!['active','paused'].includes(item.status))throw new UserError('O estado da cópia mudou durante a conferência.',409);
+   if(item.status!==finalState){const status=finalState==='active'?await this.activateReplication(id,owner):await this.pauseOfficialListing(id,owner);if(status!==finalState)throw new UserError('Estado final não confirmado.',409);item.status=status;}
+   return {status:item.status};
   },
   async activateReplication(id,owner){const {token}=await ownedOfficial(id,owner);const result=await mutation('/items/'+id,token,{status:'active'},'PUT');if(result.status!=='active')throw new UserError('Ativação não confirmada. Confira o anúncio criado.',409);return 'active';},
   async prepareOfficial(draft,expected){

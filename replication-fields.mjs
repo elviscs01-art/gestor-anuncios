@@ -17,7 +17,7 @@ export function packageValue(attribute,key){
 }
 export function readPackaging(item){
  const packed={};const legacy=String(item.shipping?.dimensions||'').match(/^(\d+)x(\d+)x(\d+),(\d+)$/);
- packageFields.forEach(([key],i)=>{const a=(item.attributes||[]).find(a=>a.id===packageId(key));packed[key]=packageValue(a,key)||(!a&&legacy&&Number(legacy[i+1])>0?legacy[i+1]:'');});return packed;
+ packageFields.forEach(([key],i)=>{const a=(item.attributes||[]).find(a=>a.id===packageId(key));const invalidExplicit=a&&String(a.value_id)==='-1';packed[key]=packageValue(a,key)||(!invalidExplicit&&legacy&&Number(legacy[i+1])>0?legacy[i+1]:'');});return packed;
 }
 export function applyPackaging(source,values){
  const copy=structuredClone(source),errors={};const required=copy.payload.shipping?.mode==='me2';
