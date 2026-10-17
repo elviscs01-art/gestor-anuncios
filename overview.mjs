@@ -1,3 +1,4 @@
+import {recordFailure,errorInfo} from './diagnostics.mjs';
 import {UserError} from './security.mjs';
 export const day=86400000;
 export const dateKey=value=>new Date(Date.parse(value)-3*3600000).toISOString().slice(0,10);
@@ -44,6 +45,6 @@ export function createOverview({db,meli,kind,now=Date.now}){
     d.shipments.push(...await Promise.all(ids.map(async id=>{try{return await meli.dashboardShipment(id,owner);}catch{return {id,error:'Consulta de envio indisponível.'};}})));d.offset+=ids.length;complete=d.offset===d.ids.length;
    }
    if(complete)d.finishedAt=new Date(now()).toISOString();await db.save(owner,job.token,d,complete?'complete':'running');
-  }catch(e){await db.save(owner,job.token,d,'failed',e instanceof UserError?e.message:'Não foi possível atualizar. Tente novamente; o último resumo completo foi mantido.');}}
+  }catch(e){await recordFailure('collection:'+kind,{operation:'collection.'+kind,stage:d.stage,...errorInfo(e)});await db.save(owner,job.token,d,'failed',e instanceof UserError?e.message:'Não foi possível atualizar. Tente novamente; o último resumo completo foi mantido.');}}
  };
 }

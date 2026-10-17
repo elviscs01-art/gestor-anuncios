@@ -1,3 +1,4 @@
+import {diagnosticContext,recordFailure,resolveFailure,errorInfo,diagnosticPrompt,observe} from './diagnostics.mjs';
 import * as qualityView from './quality-views.mjs';
 import {createReplacement} from './replacement.mjs';
 import * as replacementView from './replacement-views.mjs';
@@ -9,6 +10,7 @@ import * as overviewView from './overview-views.mjs';
 import {readFileSync} from 'node:fs';
 const replacementScript=readFileSync(new URL('./replacement-client.js',import.meta.url),'utf8');
 const qualityScript=readFileSync(new URL('./quality-client.js',import.meta.url),'utf8');
+const diagnosticScript=readFileSync(new URL('./diagnostics-client.js',import.meta.url),'utf8');
 const replicationScript=readFileSync(new URL('./replication-client.js',import.meta.url),'utf8');
 const overviewScript=readFileSync(new URL('./overview-client.js',import.meta.url),'utf8');
 const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
@@ -36,24 +38,26 @@ export function config(env){
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
 export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality,now=Date.now}){
+ meli=observe(meli,'meli');replication=observe(replication,'replication');replacement=observe(replacement,'replacement');publications=observe(publications,'publications');lab=observe(lab,'testLab');
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
  const cookie=(value,maxAge)=>`${cookieName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${settings.production?'; Secure':''}`;
- const handler=async(req,res)=>{
+ const rawHandler=async(req,res)=>{
   const nonce=random();
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin');
   res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src https://*.mlstatic.com; form-action 'self' https://auth.mercadolivre.com.br https://www.mercadolivre.com.br; frame-ancestors 'none'; base-uri 'none'");
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes','/sem-replicacao','/qualidade'].some(p=>req.url.startsWith(p));
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes','/sem-replicacao','/qualidade','/configuracoes/erros'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
    if(req.method==='GET'&&path==='/replacement.js')return send(200,replacementScript,'text/javascript; charset=utf-8');
+   if(req.method==='GET'&&path==='/diagnostics.js')return send(200,diagnosticScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/quality.js')return send(200,qualityScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/replication.js')return send(200,replicationScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/overview.js')return send(200,overviewScript,'text/javascript; charset=utf-8');
@@ -81,6 +85,8 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    if(!session){if(jsonMetrics)return send(401,JSON.stringify({error:'Sessão expirada. Entre novamente no aplicativo.'}),'application/json');return redirect('/login');}
    if(req.method==='POST'&&!equal(form.get('csrf')||'',session.csrf))throw new UserError('Formulário expirado. Recarregue a página e tente novamente.',403);
    session={...session,page:path};
+   const context=diagnosticContext.getStore();if(context){context.authorized=true;context.owner=String((await store.summary())?.user_id||'app');res.on?.('finish',()=>{if(res.statusCode<400)void resolveFailure('request:'+req.method+':'+path);});}
+   if(path==='/configuracoes/erros'&&req.method==='GET'){const rows=await store.diagnostics?.list(context?.owner||'app')||[];return send(200,JSON.stringify({text:diagnosticPrompt(rows)}),'application/json');}
    if(path==='/logout'&&req.method==='POST'){await store.deleteSession(sessionId);res.setHeader('Set-Cookie',cookie('',0));return redirect('/login');}
    if(path==='/configuracoes'&&req.method==='GET'){
     const notices={connected:'Autorização salva. Confira o vendedor e consulte o anúncio de referência.',oauth_failed:'Não foi possível confirmar a autorização. Confira a conta principal, as permissões, o PKCE e o endereço de retorno; depois tente conectar novamente.'};
@@ -162,8 +168,8 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      return send(200,JSON.stringify(replacementView.listState(await catalog.read(owner),await replacement.list(owner),session,url.searchParams)),'application/json');
     }
     if(path==='/substituicoes/iniciar'&&req.method==='POST'){const row=await replacement.begin(owner,form.get('item'));return redirect('/substituicoes/resultado/'+row.id);}
-    const match=path.match(/^[/]substituicoes[/]resultado[/]([A-Za-z0-9_-]{43})(?:[/](avancar|dados))?$/);
-    if(match){let row=await replacement.read(match[1],owner);if(!match[2]&&req.method==='GET')return send(200,replacementView.result(row,session));if(match[2]==='avancar'&&req.method==='POST')row=await replacement.advance(match[1],owner);else if(!(match[2]==='dados'&&req.method==='GET'))throw new UserError('Método não permitido.',405);return send(200,JSON.stringify(replacementView.state(row)),'application/json');}
+    const match=path.match(/^[/]substituicoes[/]resultado[/]([A-Za-z0-9_-]{43})(?:[/](avancar|dados|retomar))?$/);
+    if(match){let row=await replacement.read(match[1],owner);if(match[2]==='retomar'&&req.method==='POST'){await replacement.retry(match[1],owner);return redirect('/substituicoes/resultado/'+match[1]);}if(!match[2]&&req.method==='GET')return send(200,replacementView.result(row,session));if(match[2]==='avancar'&&req.method==='POST')row=await replacement.advance(match[1],owner);else if(!(match[2]==='dados'&&req.method==='GET'))throw new UserError('Método não permitido.',405);return send(200,JSON.stringify(replacementView.state(row)),'application/json');}
     throw new UserError('Página não encontrada.',404);
    }
    if(path==='/publicacoes'||path.startsWith('/publicacoes/')){
@@ -276,12 +282,14 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
    }
    return send(404,view.errorPage('Página não encontrada.',session));
   }catch(error){
+   await recordFailure('request:'+req.method+':'+new URL(req.url,settings.baseUrl).pathname,{operation:'request',...errorInfo(error)});
    const known=error instanceof UserError;
    if(!known)console.error('request_failed:'+nonce); // No URLs, tokens, password, request bodies or database error text.
    if(!res.headersSent&&jsonMetrics)return send(known?error.status:503,JSON.stringify({error:known?error.message:'Serviço temporariamente indisponível. Tente retomar o diagnóstico.'}),'application/json');
    if(!res.headersSent)send(known?error.status:503,view.errorPage(known?error.message:'Serviço temporariamente indisponível. Confira a disponibilidade do banco e tente novamente.',session));else res.end();
   }
  };
+ const handler=(req,res)=>diagnosticContext.run({reporter:store.diagnostics,route:new URL(req.url,settings.baseUrl).pathname,method:req.method,authorized:false,secrets:[settings.password,settings.key,settings.clientSecret,settings.databaseUrl]},()=>rawHandler(req,res));
  const server=http.createServer(handler);server.requestTimeout=20000;server.headersTimeout=10000;
  return {server,handler};
 }
@@ -290,7 +298,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const settings=config(process.env);
   const crypto=settings.key?vault(settings.key):null;
   const store=settings.databaseUrl?await postgres(settings.databaseUrl):new SetupSessions();
-  const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?createMeli({store,crypto,...settings}):null;
+  const meli=settings.databaseUrl&&crypto&&settings.clientId&&settings.clientSecret?observe(createMeli({store,crypto,...settings}),'meli'):null;
   const testMeli=meli?createMeli({...settings,store:store.testing,crypto,expectedSeller:'',requireTestUser:true}):null;
   const lab=meli?createLab({store,live:meli,test:testMeli,crypto}):null;
   const publications=meli?createPublications({store,meli}):null;
@@ -301,7 +309,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
   const quality=meli?createOverview({db:store.quality,meli,kind:'quality'}):null;
   const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.12.0 iniciado.'));
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.13.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

@@ -27,6 +27,18 @@ export function createReplacement({db,meli}){
    const source=await meli.replacementSource(item,owner),snapshot=replacementSnapshot(source);
    return db.create(random(),owner,item,{source,snapshot,stage:'validate',oldStatus:source.originalStatus,newStatus:null,message:'Substituição preparada. O original só será excluído depois da conferência da cópia.'});
   },
+  async retry(id,owner){
+   const row=await this.read(id,owner);if(row.status!=='blocked')return row;
+   const claim=await db.claimRetry(id,owner);if(!claim)return this.read(id,owner);let d=claim.data,status='queued';
+   try{
+    if(!d.newId){
+     if(d.creationStarted&&!d.creationRejected)throw new UserError('A criação anterior não teve resposta conclusiva. Confira a conta; uma nova cópia não será criada automaticamente.',409);
+     const source=await meli.replacementSource(d.source.sourceId,owner);d={source,snapshot:replacementSnapshot(source),stage:'validate',oldStatus:source.originalStatus,newStatus:null};
+    }else{Object.assign(d,await meli.recoverReplacement(d,owner));if(d.stage==='done')status='complete';}
+    delete d.error;d.message=status==='complete'?'Exclusão do original confirmada. Substituição concluída.':'Tentativa retomada após conferir os anúncios existentes.';
+   }catch(e){status='blocked';d.error=msg(e);}
+   await db.finish(id,owner,claim.token,d,status);return this.read(id,owner);
+  },
   async advance(id,owner){const claim=await db.claim(id,owner);if(!claim)return this.read(id,owner);const d=claim.data;let status='queued';
    try{
     switch(d.stage){
@@ -37,7 +49,7 @@ export function createReplacement({db,meli}){
       const item=await meli.createOfficialListing(d.snapshot,owner);d.newId=item.id;d.newStatus=item.status;d.stage='pause_new';d.message='Novo anúncio criado. Completando os dados antes de remover o original.';break;}
      case 'pause_new':d.newStatus='não confirmado';await db.checkpoint(id,owner,claim.token,d);d.newStatus=await meli.pauseOfficialListing(d.newId,owner);if(d.newStatus!=='paused')throw new UserError('A nova publicação não confirmou a pausa. O original foi preservado.',409);d.stage='description';break;
      case 'description':await meli.describeOfficialListing(d.newId,owner,d.snapshot.description);d.stage='compatibilities';break;
-     case 'compatibilities':await meli.applyReplicationCompatibilities(d.newId,owner,d.snapshot.compatibilities);d.stage='verify';break;
+     case 'compatibilities':await meli.applyReplicationCompatibilities(d.newId,owner,(d.remainingCompat??d.snapshot.compatibilities));delete d.remainingCompat;d.stage='verify';break;
      case 'verify':await meli.verifyReplication(d.newId,owner,d.snapshot);d.stage=d.source.originalStatus==='active'?'activate_new':'pause_old';d.message='Cópia conferida. Preparando a substituição do original.';break;
      case 'activate_new':d.newStatus='não confirmado';await db.checkpoint(id,owner,claim.token,d);d.newStatus=await meli.activateReplication(d.newId,owner);d.stage='pause_old';break;
      case 'pause_old':{
@@ -53,7 +65,7 @@ export function createReplacement({db,meli}){
       await meli.deleteReplacementOriginal(d.source,d.snapshot,d.newId,owner);d.oldStatus='deleted';d.stage='done';d.message='Substituição concluída: novo anúncio conferido e original excluído.';status='complete';break;}
      default:throw new UserError('Etapa desconhecida. Confira o resultado antes de repetir.',409);
     }
-   }catch(e){status='blocked';d.error=msg(e);d.message=d.newId?'A substituição foi interrompida. Confira abaixo os dois anúncios; não crie outra cópia.':'A substituição foi interrompida. O anúncio original não foi excluído.';if(d.creationStarted&&!d.newId)d.message='O resultado da criação precisa ser conferido. Não repita: pode existir um novo anúncio sem confirmação.';}
+   }catch(e){if(d.stage==='create'&&d.creationStarted&&!d.newId&&e instanceof UserError&&e.uncertain===false)d.creationRejected=true;status='blocked';d.error=msg(e);d.message=d.newId?'A substituição foi interrompida. Confira abaixo os dois anúncios; não crie outra cópia.':'A substituição foi interrompida. O anúncio original não foi excluído.';if(d.creationStarted&&!d.newId)d.message='O resultado da criação precisa ser conferido. Não repita: pode existir um novo anúncio sem confirmação.';}
    await db.finish(id,owner,claim.token,d,status);return this.read(id,owner);
   }
  };

@@ -1,3 +1,4 @@
+import {diagnosticContext} from './diagnostics.mjs';
 import {qualityData,editorLink} from './quality.mjs';
 import {sameSource} from './replacement.mjs';
 import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
@@ -18,6 +19,7 @@ export function shippingSummary(data){
 export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedSeller='',requireTestUser=false,fetcher=fetch,now=Date.now}){
  const redirectUri=baseUrl+'/oauth/mercadolivre/callback';
  async function call(path,{token,form}={}){
+  const context=diagnosticContext.getStore();if(context)context.secrets.push(...[token,form?.code,form?.code_verifier,form?.client_secret,form?.refresh_token].filter(v=>typeof v==='string'&&v.length>=4));
   let response;
   try{response=await fetcher(API+path,{method:form?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(12000),headers:form?{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'}:{Authorization:`Bearer ${token}`,Accept:'application/json',...(path.startsWith('/shipments/')?{'x-format-new':'true'}:{})},...(form?{body:new URLSearchParams(form)}:{})});}
   catch{throw new UserError('Não foi possível acessar o Mercado Livre. Tente novamente; se ocorreu durante a autorização, inicie uma nova conexão.',502);}
@@ -28,7 +30,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const error=new UserError(messages[response.status]||'O Mercado Livre não concluiu a solicitação. Confira a configuração e tente novamente.',response.status>=500?502:response.status);
    const code=typeof data?.error==='string'&&/^[a-zA-Z0-9_.-]{1,80}$/.test(data.error)?data.error:'';
    error.message+=' (HTTP '+response.status+(code?'; código '+code:'')+').';
-   error.remoteStatus=response.status;throw error;
+   error.remoteStatus=response.status;error.diagnostic={endpoint:path.split('?')[0],method:form?'POST':'GET',code};throw error;
   }
   return data;
  }
@@ -102,7 +104,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const causes=Array.isArray(data.cause)?data.cause:[];
    const message=causes.slice(0,12).map(c=>[c?.code,c?.message].filter(v=>typeof v==='string').join(': ').slice(0,1200)).filter(Boolean).join('\n');
    const e=new UserError('Mercado Livre retornou HTTP '+response.status+'. '+(message||String(data.message||data.error||'Solicitação recusada.').slice(0,500)),response.status>=500?502:response.status);
-   e.uncertain=response.status>=500;throw e;
+   e.uncertain=response.status>=500;e.remoteStatus=response.status;e.diagnostic={endpoint:path,method,causes:causes.slice(0,12).map(c=>({code:c.code,type:c.type,message:c.message})),fields:Object.keys(body||{})};throw e;
   }
   return data;
  }
@@ -113,7 +115,7 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    const row=await this.catalogItem(id,owner);const item=await get('/items/'+id);
    if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio de outra conta.',403);
    try{const product=item.user_product_id;if(product&&!/^MLBU[0-9]+$/.test(product))throw new UserError('Produto inválido.',502);const data=await get(product?'/user-product/'+product+'/performance':'/item/'+id+'/performance');return {...row,...qualityData(data,item)};}
-   catch(e){return {...row,score:null,editUrl:editorLink(null,id),qualityError:e.remoteStatus===404?'Avaliação ainda não disponível.':e instanceof UserError?e.message:'Não foi possível interpretar a avaliação.'};}
+   catch(e){return {...row,score:null,qualityUnavailable:e.remoteStatus===404,editUrl:editorLink(null,id),qualityError:e.remoteStatus===404?'Avaliação ainda não disponível.':e instanceof UserError?e.message:'Não foi possível interpretar a avaliação.'};}
   },
   async catalogItem(id,owner){
    if(!/^MLB\d+$/.test(id))throw new UserError('Código de anúncio inválido.');
@@ -191,6 +193,30 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
    return row;
   },
 
+  async recoverReplacement(d,owner){
+   if(!d.newId||d.newId===d.source.sourceId)throw new UserError('Não há uma cópia identificada para retomar.',409);
+   const old=(await ownedOfficial(d.source.sourceId,owner)).item,next=(await ownedOfficial(d.newId,owner)).item;
+   if(old.sub_status?.includes('deleted'))return {stage:'done',oldStatus:'deleted',newStatus:next.status};
+   if(!['active','paused','closed'].includes(old.status)||!['active','paused'].includes(next.status))throw new UserError('Os anúncios estão em um estado que exige conferência no Mercado Livre.',409);
+   await assertUnsold(old,owner);
+   if(old.status==='closed'){await this.verifyReplication(d.newId,owner,d.snapshot);if(next.status!==d.source.originalStatus)throw new UserError('Confira o status da cópia antes de concluir a exclusão.',409);return {stage:'delete_old',oldStatus:'closed',newStatus:next.status};}
+   const current=await this.replicationSource(d.source.sourceId,owner);if(!sameSource(current,d.source))throw new UserError('Os dados do anúncio original mudaram. A cópia existente precisa ser conferida; outra não será criada.',409);
+   let stage=d.stage,remainingCompat;
+   if(stage==='pause_new'&&next.status==='paused')stage='description';
+   if(stage==='description'){
+    const desc=await get('/items/'+d.newId+'/description').catch(e=>{if(e.remoteStatus===404)return {plain_text:''};throw e;});
+    if(desc.plain_text===d.snapshot.description)stage='compatibilities';else if(desc.plain_text)throw new UserError('A descrição da cópia difere do original. Confira os dois anúncios.',409);
+   }
+   if(stage==='compatibilities'){
+    const raw=await get('/items/'+d.newId+'/compatibilities?extended=true').catch(e=>{if(e.remoteStatus===404)return {products:[]};throw e;});const got=compatibilityPlan(raw),expected=d.snapshot.compatibilities;
+    const equal=(a,b)=>sameSource({compatibilities:[a]},{compatibilities:[b]});
+    if(got.some(a=>!expected.some(b=>equal(a,b))))throw new UserError('A cópia possui compatibilidades divergentes. Confira antes de retomar.',409);
+    remainingCompat=expected.filter(b=>!got.some(a=>equal(a,b)));if(!remainingCompat.length)stage='verify';
+   }
+   if(stage==='activate_new'&&next.status==='active')stage='pause_old';
+   if(stage==='pause_old'&&old.status==='paused')stage='close_old';
+   return {stage,oldStatus:old.status,newStatus:next.status,remainingCompat};
+  },
   async replacementSource(id,owner){
    const {item}=await ownedOfficial(id,owner);if(!['active','paused'].includes(item.status))throw new UserError('Somente anúncios ativos ou pausados podem ser substituídos neste fluxo. O original não foi alterado.',409);
    await assertUnsold(item,owner);const source=await this.replicationSource(id,owner);return {...source,originalStatus:item.status};
