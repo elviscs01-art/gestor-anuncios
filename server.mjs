@@ -1,3 +1,4 @@
+import * as qualityView from './quality-views.mjs';
 import {createReplacement} from './replacement.mjs';
 import * as replacementView from './replacement-views.mjs';
 import {kgToGrams} from './replication-fields.mjs';
@@ -7,6 +8,7 @@ import {createOverview,range} from './overview.mjs';
 import * as overviewView from './overview-views.mjs';
 import {readFileSync} from 'node:fs';
 const replacementScript=readFileSync(new URL('./replacement-client.js',import.meta.url),'utf8');
+const qualityScript=readFileSync(new URL('./quality-client.js',import.meta.url),'utf8');
 const replicationScript=readFileSync(new URL('./replication-client.js',import.meta.url),'utf8');
 const overviewScript=readFileSync(new URL('./overview-client.js',import.meta.url),'utf8');
 const metricsScript=readFileSync(new URL('./metrics-client.js',import.meta.url),'utf8');
@@ -33,7 +35,7 @@ export function config(env){
  if(env.TOKEN_ENCRYPTION_KEY&&env.TOKEN_ENCRYPTION_KEY===env.ADMIN_PASSWORD)throw new Error('Use chaves diferentes para login e criptografia.');
  return {production,baseUrl:base.origin,password:env.ADMIN_PASSWORD,databaseUrl:env.DATABASE_URL||'',key:env.TOKEN_ENCRYPTION_KEY||'',clientId:env.MELI_CLIENT_ID||'',clientSecret:env.MELI_CLIENT_SECRET||'',expectedSeller:env.MELI_SELLER_ID||''};
 }
-export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,now=Date.now}){
+export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality,now=Date.now}){
  const missing=[!settings.databaseUrl&&'DATABASE_URL',!settings.key&&'TOKEN_ENCRYPTION_KEY',!settings.clientId&&'MELI_CLIENT_ID',!settings.clientSecret&&'MELI_CLIENT_SECRET'].filter(Boolean);
  const cookieName=settings.production?'__Host-gestor':'gestor';
  const stamp=sessionStamp(settings.password,settings.key||processPepper);
@@ -45,13 +47,14 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
   if(settings.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
   const send=(status,body,type='text/html; charset=utf-8')=>{res.writeHead(status,{'Content-Type':type});res.end(body);};
   const redirect=path=>{res.writeHead(303,{Location:path});res.end();};
-  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes','/sem-replicacao'].some(p=>req.url.startsWith(p));
+  const jsonMetrics=(req.headers.accept||'').includes('application/json')&&['/metricas','/painel','/anuncios','/publicacoes','/substituicoes','/sem-replicacao','/qualidade'].some(p=>req.url.startsWith(p));
   let session=null;
   try{
    const url=new URL(req.url,settings.baseUrl),path=url.pathname;
    if(req.method==='GET'&&path==='/health'){try{await store.ping();return send(200,'{"status":"ok"}','application/json');}catch{return send(503,'{"status":"unavailable"}','application/json');}}
    if(req.method==='GET'&&path==='/style.css')return send(200,view.css,'text/css; charset=utf-8');
    if(req.method==='GET'&&path==='/replacement.js')return send(200,replacementScript,'text/javascript; charset=utf-8');
+   if(req.method==='GET'&&path==='/quality.js')return send(200,qualityScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/replication.js')return send(200,replicationScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/overview.js')return send(200,overviewScript,'text/javascript; charset=utf-8');
    if(req.method==='GET'&&path==='/metrics.js')return send(200,metricsScript,'text/javascript; charset=utf-8');
@@ -132,6 +135,14 @@ export function createApp({settings,store=new SetupSessions(),meli,testMeli,lab,
      if(jsonMetrics)return jsonState();
      return redirect('/metricas?auto=1');
     }
+   }
+   if(path==='/qualidade'||path.startsWith('/qualidade/')){
+    const connection=await store.summary();if(missing.length||!quality||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);const owner=String(connection.user_id);
+    if(path==='/qualidade'&&req.method==='GET')return send(200,qualityView.page(await quality.read(owner),session,url.searchParams));
+    if(path==='/qualidade/iniciar'&&req.method==='POST')await quality.start(owner);
+    else if(path==='/qualidade/avancar'&&req.method==='POST')await quality.advance(owner);
+    else if(!(path==='/qualidade/dados'&&req.method==='GET'))throw new UserError('Página não encontrada.',404);
+    return send(200,JSON.stringify(qualityView.state(await quality.read(owner),url.searchParams)),'application/json');
    }
    if(path==='/sem-replicacao'||path.startsWith('/sem-replicacao/')){
     const connection=await store.summary();if(missing.length||!catalog||!replication||!connection?.user_id)throw new UserError('Conecte a conta oficial em Configurações.',409);const owner=String(connection.user_id);
@@ -288,8 +299,9 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const catalog=meli?createOverview({db:store.catalog,meli,kind:'catalog'}):null;
   const replication=meli?createReplication({db:store.replication,meli}):null;
   const replacement=meli?createReplacement({db:store.replacement,meli}):null;
-  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement});
-  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.11.0 iniciado.'));
+  const quality=meli?createOverview({db:store.quality,meli,kind:'quality'}):null;
+  const {server}=createApp({settings,store,meli,testMeli,lab,publications,metrics,dashboard,catalog,replication,replacement,quality});
+  server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Gestor 0.12.0 iniciado.'));
   process.on('SIGTERM',()=>{server.close(async()=>{await store.close?.();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();});
  }catch{console.error('Falha ao iniciar. Confira as variáveis de configuração e a conexão com o banco. Nenhum segredo foi registrado.');process.exitCode=1;}
 }

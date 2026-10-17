@@ -1,6 +1,6 @@
 import {random} from './security.mjs';
 export async function createMetricsStore(pool, table='metrics_jobs'){
- if(!['metrics_jobs','dashboard_jobs','catalog_jobs'].includes(table))throw new Error('Invalid job table');
+ if(!['metrics_jobs','dashboard_jobs','catalog_jobs','quality_jobs'].includes(table))throw new Error('Invalid job table');
  const original=pool;pool={query:(sql,args)=>original.query(sql.replaceAll('metrics_jobs',table),args)};
  await pool.query("CREATE TABLE IF NOT EXISTS metrics_jobs (owner_id text PRIMARY KEY, status text NOT NULL, data jsonb NOT NULL, snapshot jsonb, message text, token text, lease_until timestamptz, updated_at timestamptz NOT NULL DEFAULT now());");
  return {

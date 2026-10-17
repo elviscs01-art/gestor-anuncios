@@ -15,7 +15,7 @@ export function summarize(data,days=30){
  return {buckets,statuses,cents,orders,units,ticket:orders?Math.round(cents/orders):0};
 }
 export function createOverview({db,meli,kind,now=Date.now}){
- const catalog=kind==='catalog';
+ const catalog=kind==='catalog'||kind==='quality';
  return {
   read:owner=>db.read(owner),
   async start(owner){const p=await meli.metricsProfile(owner);await db.start(owner,{...range(now()),profile:reputation(p),stage:catalog?'scan':'orders',orderGroup:'general',groupIds:[],ids:[],rows:[],shipments:[],cursor:null,offset:0,total:null,startedAt:new Date(now()).toISOString()});},
@@ -29,7 +29,7 @@ export function createOverview({db,meli,kind,now=Date.now}){
     if(page.done){if(d.total!==null&&d.ids.length<d.total)throw new UserError('Lista incompleta. Atualize novamente.',502);d.stage='items';}else d.cursor=page.cursor;
    }else if(catalog){
     const ids=d.ids.slice(d.offset,d.offset+5);
-    d.rows.push(...await Promise.all(ids.map(async id=>{try{return await meli.catalogItem(id,owner);}catch{return {id,error:'Informações indisponíveis. Atualize para tentar novamente.'};}})));d.offset+=ids.length;complete=d.offset===d.ids.length;
+    d.rows.push(...await Promise.all(ids.map(async id=>{try{return await (kind==='quality'?meli.qualityItem(id,owner):meli.catalogItem(id,owner));}catch{return {id,error:'Informações indisponíveis. Atualize para tentar novamente.'};}})));d.offset+=ids.length;complete=d.offset===d.ids.length;
    }else if(d.stage==='orders'){
     const page=await meli.dashboardOrders(owner,{from:d.from,to:d.to,offset:d.offset,cancelledOnly:d.orderGroup==='cancelled'});
     if(page.total>10000)throw new UserError('Mais de 10 mil pedidos no período. Este volume requer uma coleta por intervalos menores; o resumo anterior foi mantido.',409);

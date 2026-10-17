@@ -66,6 +66,7 @@ export async function postgres(url) {
  store.replacement=await createReplacementStore(pool);
  store.metrics=await createMetricsStore(pool);
  store.dashboard=await createMetricsStore(pool,'dashboard_jobs');
+ store.quality=await createMetricsStore(pool,'quality_jobs');
  store.catalog=await createMetricsStore(pool,'catalog_jobs');
  return store;
 }

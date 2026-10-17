@@ -1,3 +1,4 @@
+import {qualityData,editorLink} from './quality.mjs';
 import {sameSource} from './replacement.mjs';
 import {packageFields,packageId,readPackaging} from './replication-fields.mjs';
 import {replicationSource,compatibilityPlan} from './replication.mjs';
@@ -108,6 +109,12 @@ export function createMeli({store,crypto,clientId,clientSecret,baseUrl,expectedS
  return {
   redirectUri,
   async metricsProfile(owner){return (await officialAccess(owner)).profile;},
+  async qualityItem(id,owner){
+   const row=await this.catalogItem(id,owner);const item=await get('/items/'+id);
+   if(item.id!==id||String(item.seller_id)!==String(owner))throw new UserError('Anúncio de outra conta.',403);
+   try{const product=item.user_product_id;if(product&&!/^MLBU[0-9]+$/.test(product))throw new UserError('Produto inválido.',502);const data=await get(product?'/user-product/'+product+'/performance':'/item/'+id+'/performance');return {...row,...qualityData(data,item)};}
+   catch(e){return {...row,score:null,editUrl:editorLink(null,id),qualityError:e.remoteStatus===404?'Avaliação ainda não disponível.':e instanceof UserError?e.message:'Não foi possível interpretar a avaliação.'};}
+  },
   async catalogItem(id,owner){
    if(!/^MLB\d+$/.test(id))throw new UserError('Código de anúncio inválido.');
    const item=await get('/items/'+id);
